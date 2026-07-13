@@ -657,7 +657,23 @@ async function runOCR(dataUrl) {
 // (model, date of manufacture, breaker size, etc). Used to avoid mistaking
 // those values for the serial number.
 const SERIAL_BLACKLIST_RE = /\b(model|mod\.?|mfg|manufactur|date|mfd|voltage|phase|freq|refrigerant|factory\s*charge|circuit|breaker|ampacity|\bamp\b|pressure|\brla\b|\blra\b|\bfla\b|btu|weight|part\s*no|p\/n|barcode|installer|patent|warranty|made\s*in|country|catalog|cat\.?\s*no|psig|lbs|kg)\b/i;
-const SERIAL_LABEL_RE = /\b(?:serial\s*(?:no\.?|number|#)?|s\/?n)\b/i;
+// Covers "Serial", "Serial No.", "Serial Number", "Serial#", the common
+// abbreviation "Ser./Ser No.", and "S/N" / "SN".
+const SERIAL_LABEL_RE = /\b(?:serial\s*(?:no\.?|number|#)?|ser\.?\s*(?:no\.?|number|#)|s\/?n)\b/i;
+// Words that are part of the *label*, not the value — stripped iteratively
+// so wrapped labels like "SERIAL" / "NUMBER: XYZ123" (split across two OCR
+// lines) still resolve to just "XYZ123".
+const LEADING_LABEL_WORDS_RE = /^(?:serial|ser|number|num|no\.?|name|plate|s\/?n)\b[:#\-.]*\s*/i;
+
+function stripLeadingLabelWords(str) {
+  let s = String(str || '').trim().replace(/^[\s:#\-.]+/, '');
+  for (let i = 0; i < 3; i++) {
+    const before = s;
+    s = s.replace(LEADING_LABEL_WORDS_RE, '').replace(/^[\s:#\-.]+/, '');
+    if (s === before) break;
+  }
+  return s.trim();
+}
 
 function cleanSerialToken(raw) {
   // Strip anything that isn't a letter/digit/dash/slash. This is what
@@ -666,9 +682,9 @@ function cleanSerialToken(raw) {
   return String(raw || '').replace(/[^A-Za-z0-9\-\/]/g, '').toUpperCase();
 }
 
-function isPlausibleSerial(token) {
+function isPlausibleSerial(token, minLength) {
   if (!token) return false;
-  if (token.length < 4 || token.length > 24) return false;
+  if (token.length < minLength || token.length > 24) return false;
   if (!/[0-9]/.test(token)) return false; // real serials virtually always contain a digit
   if (/^0+$/.test(token)) return false;
   if (/^(.)\1+$/.test(token)) return false; // e.g. "IIIIIIII" — a scan artifact, not a code
@@ -684,9 +700,13 @@ function extractSerialCandidates(text) {
   const candidates = [];
   const seen = new Set();
 
-  function addCandidate(raw, score) {
+  // Candidates found next to a recognized label ("Serial", "S/N", ...) are
+  // trusted more, so they're allowed to be shorter (real serials can be as
+  // short as 3-4 characters). Unlabeled fallback guesses need to look more
+  // like a real code to avoid grabbing random OCR noise.
+  function addCandidate(raw, score, minLength) {
     const cleaned = cleanSerialToken(raw);
-    if (!isPlausibleSerial(cleaned) || seen.has(cleaned)) return;
+    if (!isPlausibleSerial(cleaned, minLength) || seen.has(cleaned)) return;
     seen.add(cleaned);
     candidates.push({ value: cleaned, score });
   }
@@ -694,20 +714,29 @@ function extractSerialCandidates(text) {
   lines.forEach((line, idx) => {
     const labelMatch = line.match(SERIAL_LABEL_RE);
     if (!labelMatch) return;
-    // Handle "SERIAL NUMBER: SN: NCS2607X91438" — strip the label match
-    // itself, then any immediately-repeated "S/N:" noise, before reading
-    // the actual value.
-    const after = line.slice(labelMatch.index + labelMatch[0].length);
-    const valuePart = after.replace(/^[\s:#\-]*(?:s\/?n\.?\s*[:#\-]?\s*)?/i, '').trim();
+    // Handle "SERIAL NUMBER: SN: NCS2607X91438" (repeated/nested labels) and
+    // a label that wraps to its own OCR line ("SERIAL" / "NUMBER: XYZ123")
+    // by looking ahead up to two lines until something is left after
+    // stripping every leading label word.
+    let valuePart = stripLeadingLabelWords(line.slice(labelMatch.index + labelMatch[0].length));
+    let lookIdx = idx;
+    while (!valuePart && lookIdx < lines.length - 1 && lookIdx < idx + 2) {
+      lookIdx++;
+      valuePart = stripLeadingLabelWords(lines[lookIdx]);
+    }
     const tokens = valuePart.split(/\s+/).filter(Boolean);
-    if (tokens.length) {
+    if (tokens.length === 1) {
+      addCandidate(tokens[0], 100, 3);
+    } else if (tokens.length >= 2 && tokens.length <= 3 && tokens.every(t => t.length <= 12)) {
       // OCR sometimes splits one code across whitespace — try the joined
-      // reading first, but keep the first single token as a fallback.
-      addCandidate(tokens.join(''), 100);
-      if (tokens.length > 1) addCandidate(tokens[0], 90);
-    } else if (lines[idx + 1] && !SERIAL_LABEL_RE.test(lines[idx + 1])) {
-      // The label sat alone on its own line — the value is likely next.
-      addCandidate(lines[idx + 1].split(/\s+/)[0], 80);
+      // reading first, but keep the first token as a fallback in case the
+      // trailing tokens actually belong to the next field.
+      addCandidate(tokens.join(''), 100, 3);
+      addCandidate(tokens[0], 85, 3);
+    } else if (tokens.length > 0) {
+      // Several tokens with at least one long one usually means other
+      // fields got merged onto this line — take just the first token.
+      addCandidate(tokens[0], 95, 3);
     }
   });
 
@@ -717,7 +746,7 @@ function extractSerialCandidates(text) {
   lines.forEach(line => {
     if (SERIAL_LABEL_RE.test(line) || SERIAL_BLACKLIST_RE.test(line)) return;
     const m = line.match(/\b([A-Z0-9][A-Z0-9\-\/]{4,20})\b/i);
-    if (m) addCandidate(m[1], 40);
+    if (m) addCandidate(m[1], 40, 5);
   });
 
   return candidates.sort((a, b) => b.score - a.score);
