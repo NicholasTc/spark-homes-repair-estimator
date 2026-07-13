@@ -119,9 +119,10 @@
     <div class="absolute inset-0 bg-black/60" onclick="closeOcrModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div class="bg-white rounded-t-2xl w-full max-w-md p-5 pointer-events-auto safe-bottom sheet" id="ocr-box">
-        <p class="font-bold text-slate-900 text-base mb-1">🔍 Serial Number Detected</p>
-        <p class="text-xs text-slate-400 mb-3">Confirm or edit the extracted text</p>
-        <input id="ocr-input" type="text" class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-base font-mono focus:border-brand text-slate-900" />
+        <p class="font-bold text-slate-900 text-base mb-1" id="ocr-title">🔍 Serial Number Detected</p>
+        <p class="text-xs text-slate-400 mb-3" id="ocr-subtitle">Confirm or edit the extracted text</p>
+        <input id="ocr-input" type="text" placeholder="Type serial number…" class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-base font-mono focus:border-brand text-slate-900" />
+        <div id="ocr-candidates" class="flex flex-wrap items-center gap-1.5 mt-2 empty:mt-0"></div>
         <div class="flex gap-3 mt-4">
           <button onclick="closeOcrModal()" class="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm">Skip</button>
           <button id="ocr-save-btn" class="flex-1 py-3 rounded-xl bg-brand text-white font-semibold text-sm">Save Serial #</button>
@@ -552,41 +553,179 @@ async function compressPhoto(file) {
   });
 }
 
+// Dedicated OCR-quality render, kept separate from the small compressed copy
+// used for storage/display. Nameplates pack a lot of small dense text, so
+// the 900px/0.65-quality storage photo is too degraded for Tesseract to read
+// reliably. This keeps far more resolution and applies a grayscale contrast
+// stretch, which makes engraved/printed text edges much crisper for OCR
+// without the file-size cost of storing it.
+async function preprocessForOCR(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 2000;
+        const r = Math.min(MAX / img.width, MAX / img.height, 1);
+        const w = Math.max(1, Math.round(img.width * r));
+        const h = Math.max(1, Math.round(img.height * r));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+
+        try {
+          const imgData = ctx.getImageData(0, 0, w, h);
+          const d = imgData.data;
+          const gray = new Float32Array(w * h);
+          let min = 255, max = 0;
+          for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+            const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            gray[j] = g;
+            if (g < min) min = g;
+            if (g > max) max = g;
+          }
+          const range = Math.max(1, max - min);
+          for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+            const v = ((gray[j] - min) / range) * 255;
+            d[i] = d[i + 1] = d[i + 2] = v;
+          }
+          ctx.putImageData(imgData, 0, 0);
+        } catch (e) {
+          // If pixel access fails for any reason, fall back to the plain
+          // high-res color render — still better than the tiny storage copy.
+        }
+        resolve(c.toDataURL('image/png'));
+      };
+      img.onerror = () => reject(new Error('image load failed'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('file read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
 let tesseractLoaded = false;
+let _ocrWorkerPromise = null;
+async function getOcrWorker() {
+  if (!_ocrWorkerPromise) {
+    _ocrWorkerPromise = (async () => {
+      if (!tesseractLoaded) {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+          s.onload = res; s.onerror = () => rej(new Error('tesseract script failed to load'));
+          document.head.appendChild(s);
+        });
+        tesseractLoaded = true;
+      }
+      const worker = await Tesseract.createWorker('eng');
+      // Nameplates are a scattered grid of short text blocks, not a
+      // paragraph, so SPARSE_TEXT (mode 11) reads each label/value pair
+      // independently instead of trying to reflow everything into one
+      // column. Restricting the charset to what serials/labels actually use
+      // stops Tesseract from "reading" scratches, screws and icons as
+      // symbols like ©, |, = — the main source of the garbled output.
+      await worker.setParameters({
+        tessedit_pageseg_mode: '11',
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-/:. ',
+        preserve_interword_spaces: '1',
+        user_defined_dpi: '300',
+      });
+      return worker;
+    })();
+    _ocrWorkerPromise.catch(() => { _ocrWorkerPromise = null; });
+  }
+  return _ocrWorkerPromise;
+}
+
 async function runOCR(dataUrl) {
   try {
-    if (!tesseractLoaded) {
-      await new Promise((res, rej) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-        s.onload = res; s.onerror = () => rej(new Error('tesseract script failed to load'));
-        document.head.appendChild(s);
-      });
-      tesseractLoaded = true;
-    }
-    const worker = await Tesseract.createWorker('eng');
+    const worker = await getOcrWorker();
     const { data: { text } } = await worker.recognize(dataUrl);
-    await worker.terminate();
     return text;
-  } catch(e) {
-    // Not fatal — likely offline with assets not yet cached. Fails silently.
+  } catch (e) {
+    // Not fatal — likely offline with assets not yet cached, or a transient
+    // OCR failure. Reset the worker so the next attempt starts fresh, and
+    // fail silently; the user can still enter the serial number manually.
+    _ocrWorkerPromise = null;
     return null;
   }
 }
 
-function parseSerial(text) {
-  if (!text) return null;
-  const patterns = [
-    /(?:s\/n|serial\s*(?:no\.?|number)?)\s*[:\-#]?\s*([A-Z0-9][A-Z0-9\-\/]{5,20})/i,
-    /(?:model|mod\.?)\s*[:\-#]?\s*([A-Z0-9][A-Z0-9\-\/]{4,20})/i,
-    /\b([A-Z]{1,4}[0-9]{5,14})\b/,
-    /\b([0-9]{8,14})\b/,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) return m[1].trim().toUpperCase();
+// Labels that mark the line as belonging to a *different* nameplate field
+// (model, date of manufacture, breaker size, etc). Used to avoid mistaking
+// those values for the serial number.
+const SERIAL_BLACKLIST_RE = /\b(model|mod\.?|mfg|manufactur|date|mfd|voltage|phase|freq|refrigerant|factory\s*charge|circuit|breaker|ampacity|\bamp\b|pressure|\brla\b|\blra\b|\bfla\b|btu|weight|part\s*no|p\/n|barcode|installer|patent|warranty|made\s*in|country|catalog|cat\.?\s*no|psig|lbs|kg)\b/i;
+const SERIAL_LABEL_RE = /\b(?:serial\s*(?:no\.?|number|#)?|s\/?n)\b/i;
+
+function cleanSerialToken(raw) {
+  // Strip anything that isn't a letter/digit/dash/slash. This is what
+  // eliminates OCR noise characters (©, ®, |, =, ~, curly quotes, etc.) that
+  // used to leak straight into the "detected" serial number.
+  return String(raw || '').replace(/[^A-Za-z0-9\-\/]/g, '').toUpperCase();
+}
+
+function isPlausibleSerial(token) {
+  if (!token) return false;
+  if (token.length < 4 || token.length > 24) return false;
+  if (!/[0-9]/.test(token)) return false; // real serials virtually always contain a digit
+  if (/^0+$/.test(token)) return false;
+  if (/^(.)\1+$/.test(token)) return false; // e.g. "IIIIIIII" — a scan artifact, not a code
+  return true;
+}
+
+// Returns every plausible serial-number reading found in OCR text, ranked
+// best-first, so the UI can offer the top guess plus a couple of
+// alternatives instead of trusting a single fragile regex match.
+function extractSerialCandidates(text) {
+  if (!text) return [];
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const candidates = [];
+  const seen = new Set();
+
+  function addCandidate(raw, score) {
+    const cleaned = cleanSerialToken(raw);
+    if (!isPlausibleSerial(cleaned) || seen.has(cleaned)) return;
+    seen.add(cleaned);
+    candidates.push({ value: cleaned, score });
   }
-  return null;
+
+  lines.forEach((line, idx) => {
+    const labelMatch = line.match(SERIAL_LABEL_RE);
+    if (!labelMatch) return;
+    // Handle "SERIAL NUMBER: SN: NCS2607X91438" — strip the label match
+    // itself, then any immediately-repeated "S/N:" noise, before reading
+    // the actual value.
+    const after = line.slice(labelMatch.index + labelMatch[0].length);
+    const valuePart = after.replace(/^[\s:#\-]*(?:s\/?n\.?\s*[:#\-]?\s*)?/i, '').trim();
+    const tokens = valuePart.split(/\s+/).filter(Boolean);
+    if (tokens.length) {
+      // OCR sometimes splits one code across whitespace — try the joined
+      // reading first, but keep the first single token as a fallback.
+      addCandidate(tokens.join(''), 100);
+      if (tokens.length > 1) addCandidate(tokens[0], 90);
+    } else if (lines[idx + 1] && !SERIAL_LABEL_RE.test(lines[idx + 1])) {
+      // The label sat alone on its own line — the value is likely next.
+      addCandidate(lines[idx + 1].split(/\s+/)[0], 80);
+    }
+  });
+
+  // Fallback: scan remaining lines for a standalone alphanumeric code shaped
+  // like a typical serial, skipping any line that clearly belongs to
+  // another labeled field (model, date, pressure rating, etc).
+  lines.forEach(line => {
+    if (SERIAL_LABEL_RE.test(line) || SERIAL_BLACKLIST_RE.test(line)) return;
+    const m = line.match(/\b([A-Z0-9][A-Z0-9\-\/]{4,20})\b/i);
+    if (m) addCandidate(m[1], 40);
+  });
+
+  return candidates.sort((a, b) => b.score - a.score);
+}
+
+function parseSerial(text) {
+  const candidates = extractSerialCandidates(text);
+  return candidates.length ? candidates[0].value : null;
 }
 
 function timeAgo(ts) {
@@ -1853,7 +1992,9 @@ function renderGroupDetail() {
                         <button onclick="handleDeleteItem('${project.id}','${room.id}','${state.activeGroupKey}','${selected.id}')"
                           class="w-8 h-8 bg-red-50 rounded-xl flex items-center justify-center text-red-400 text-xs font-bold">✕</button>
                       </div>
-                      ${selected.serialNumber ? `<p class="mt-1.5 text-xs text-brand font-semibold">🔑 S/N: ${esc(selected.serialNumber)}</p>` : ''}
+                      ${selected.serialNumber
+                        ? `<button onclick="editSerialManually('${project.id}','${room.id}','${state.activeGroupKey}','${selected.id}','${esc(selected.serialNumber)}')" class="mt-1.5 flex items-center gap-1 text-xs text-brand font-semibold"><span>🔑 S/N: ${esc(selected.serialNumber)}</span><span class="text-slate-300 not-italic">✏</span></button>`
+                        : (cat.hasYear ? `<button onclick="editSerialManually('${project.id}','${room.id}','${state.activeGroupKey}','${selected.id}','')" class="mt-1.5 text-xs text-slate-400 hover:text-brand font-medium underline">+ Add serial number</button>` : '')}
                       ${cat.min && selected.qty > 0 && (selected.qty * selected.unitCost) < cat.min ? `<p class="mt-1.5 text-xs text-amber-600 font-medium">⚠ Below typical minimum of ${fmt(cat.min)} for this item</p>` : ''}
                       <input type="text" value="${esc(selected.notes || '')}" placeholder="Add a note (optional)…"
                         class="mt-2 w-full text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 focus:outline-none focus:border-brand placeholder:text-slate-300"
@@ -2563,8 +2704,6 @@ async function handlePhotoCapture(event, projectId, roomId, groupKey, lineItemId
   const file = event.target.files?.[0];
   if (!file) return;
   event.target.value = '';
-  const dataUrl = await compressPhoto(file);
-  const photo = { id: uid(), dataUrl, caption: '', ocrText: null, serialNumber: null };
 
   // Check if this item has hasYear (needs OCR attempt)
   const project = state.projects.find(p => p.id === projectId);
@@ -2573,6 +2712,16 @@ async function handlePhotoCapture(event, projectId, roomId, groupKey, lineItemId
   const item = g ? getLineItemById(g, lineItemIdOrGroup) : null;
   const catItem = item?.catalogId ? CATALOG[item.catalogId] : null;
   const needsOCR = catItem?.hasYear;
+
+  // Build the small compressed copy for storage/display, and — only when
+  // this item needs a serial — a separate, much higher-resolution render
+  // dedicated to OCR. Using the storage copy for OCR was the main reason
+  // detection used to be unreliable.
+  const [dataUrl, ocrDataUrl] = await Promise.all([
+    compressPhoto(file),
+    needsOCR ? preprocessForOCR(file).catch(() => null) : Promise.resolve(null),
+  ]);
+  const photo = { id: uid(), dataUrl, caption: '', ocrText: null, serialNumber: null };
 
   if (lineItemIdOrGroup === 'group') {
     addPhotoToGroup(projectId, roomId, groupKey, photo);
@@ -2588,13 +2737,21 @@ async function handlePhotoCapture(event, projectId, roomId, groupKey, lineItemId
     // from a prior online session, this still works offline. It fails silently
     // if the assets aren't available yet.
     setTimeout(async () => {
-      const text = await runOCR(dataUrl);
-      const serial = parseSerial(text);
-      if (serial || text?.length > 3) {
-        openOcrModal(serial || text?.trim().substring(0, 40), projectId, roomId, groupKey, lineItemIdOrGroup, photo.id);
+      const text = await runOCR(ocrDataUrl || dataUrl);
+      const candidates = extractSerialCandidates(text);
+      // Only surface a modal when something plausible was actually found —
+      // showing raw garbled OCR text as if it were the serial (the old
+      // behavior) was misleading. If nothing plausible is found, the user
+      // can still tap "+ Add serial number" to enter it manually.
+      if (candidates.length) {
+        openOcrModal(candidates, projectId, roomId, groupKey, lineItemIdOrGroup, photo.id);
       }
-    }, 500);
+    }, 300);
   }
+}
+
+function editSerialManually(projectId, roomId, groupKey, lineItemId, currentValue) {
+  openOcrModal(currentValue ? [{ value: currentValue, score: 0 }] : [], projectId, roomId, groupKey, lineItemId, null);
 }
 
 function openPanel() {
@@ -2733,9 +2890,19 @@ function closeLightbox() {
 // ── OCR Modal ──
 
 let _ocrCtx = null;
-function openOcrModal(detectedText, projectId, roomId, groupKey, lineItemId, photoId) {
+function openOcrModal(candidates, projectId, roomId, groupKey, lineItemId, photoId) {
   _ocrCtx = { projectId, roomId, groupKey, lineItemId, photoId };
-  document.getElementById('ocr-input').value = detectedText || '';
+  const list = Array.isArray(candidates) ? candidates : (candidates ? [{ value: candidates, score: 0 }] : []);
+  const isManualEntry = !photoId;
+  document.getElementById('ocr-title').textContent = isManualEntry ? '🔑 Serial Number' : '🔍 Serial Number Detected';
+  document.getElementById('ocr-subtitle').textContent = isManualEntry ? 'Enter or edit the serial number' : 'Confirm or edit the extracted text';
+  document.getElementById('ocr-input').value = list[0]?.value || '';
+  const alts = list.slice(1, 4);
+  document.getElementById('ocr-candidates').innerHTML = alts.length
+    ? `<span class="w-full text-[11px] text-slate-400">Other text found on the label:</span>` +
+      alts.map(c => `<button type="button" onclick="document.getElementById('ocr-input').value='${esc(c.value)}'"
+        class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-mono hover:bg-slate-200">${esc(c.value)}</button>`).join('')
+    : '';
   const modal = document.getElementById('ocr-modal');
   modal.classList.remove('hidden');
   setTimeout(() => document.getElementById('ocr-box').classList.add('open'), 10);
