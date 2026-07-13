@@ -10,7 +10,7 @@
   <title>Spark Homes Estimator</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png" />
-  <script>if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});</script>
+  <script>if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});</script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -166,8 +166,50 @@
     </div>
   </div>
 
+  <!-- Rename Project Sheet -->
+  <div id="rename-modal" class="fixed inset-0 z-[70] hidden">
+    <div class="absolute inset-0 bg-black/60" onclick="closeRenameModal()"></div>
+    <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
+      <div class="bg-white rounded-t-2xl w-full max-w-md p-5 pointer-events-auto safe-bottom sheet" id="rename-box">
+        <p class="font-bold text-slate-900 text-lg mb-4">Rename Project</p>
+        <input id="rename-input" type="text" placeholder="Project name"
+          class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:border-brand text-slate-900"
+          autocomplete="off" onkeydown="if(event.key==='Enter')saveRename()" />
+        <div class="flex gap-3 mt-4">
+          <button onclick="closeRenameModal()" class="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm">Cancel</button>
+          <button onclick="saveRename()" class="flex-1 py-3 rounded-xl bg-brand text-white font-semibold text-sm">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Room Sheet -->
+  <div id="room-modal" class="fixed inset-0 z-[70] hidden">
+    <div class="absolute inset-0 bg-black/60" onclick="closeRoomModal()"></div>
+    <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
+      <div class="bg-white rounded-t-2xl w-full max-w-md pointer-events-auto safe-bottom sheet" id="room-box">
+        <div class="px-5 pt-5 pb-3 border-b border-slate-100 flex justify-between items-center">
+          <p class="font-bold text-slate-900 text-base">Add a Room</p>
+          <button onclick="closeRoomModal()" class="text-slate-400 text-lg">✕</button>
+        </div>
+        <div id="room-modal-list" class="px-5 py-4 scroll-y max-h-[70vh]"></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 <!-- ═══ END OVERLAY LAYER ═══ -->
+
+<!-- Storage / global toast banner -->
+<div id="toast-banner" class="fixed top-0 left-0 right-0 z-[90] hidden pt-safe">
+  <div class="px-3 pt-3">
+    <div class="bg-amber-500 text-white rounded-xl shadow-lg px-4 py-3 flex items-start gap-2.5 max-w-md mx-auto">
+      <span class="text-base flex-shrink-0">⚠</span>
+      <p id="toast-banner-msg" class="text-xs font-medium leading-snug flex-1"></p>
+      <button onclick="hideToast()" class="text-white/80 text-sm flex-shrink-0 leading-none">✕</button>
+    </div>
+  </div>
+</div>
 
 <div id="app" class="h-full flex flex-col"></div>
 
@@ -326,6 +368,7 @@ const GROUPS = {
   'ex:windows':    { label:'Windows',               riskLevel:'normal',   section:'Exterior',           itemIds:['ex-13','ex-14','ex-15','ex-16','ex-17','ex-18','ex-19'] },
   'ex:garage':     { label:'Garage',                riskLevel:'normal',   section:'Exterior',           itemIds:['ex-20','ex-21','ex-22','ex-23'] },
   'ex:trees':      { label:'Trees',                 riskLevel:'normal',   section:'Exterior',           itemIds:['ex-10','ex-11','ex-12'] },
+  'custom:general':{ label:'Items & Repairs',        riskLevel:'normal',   section:'Custom',             itemIds:[] },
 };
 
 // ── Room Type definitions: which groups belong to each room type
@@ -340,6 +383,8 @@ const ROOM_TYPES = [
 ];
 const ROOM_TYPE_MAP = {};
 ROOM_TYPES.forEach(r => ROOM_TYPE_MAP[r.id] = r);
+// Custom room type — not shown in project setup, only added via "Add Room" → Custom
+ROOM_TYPE_MAP['custom'] = { id:'custom', label:'Custom Room', icon:'📋', multi:true, groupKeys:['custom:general'], walkthroughOrder:8 };
 
 // ── Quick Profiles: pre-built item sets for common scenarios
 const QUICK_PROFILES = {
@@ -410,6 +455,17 @@ function loadState() {
   } catch(e) { console.error('loadState:', e); }
 }
 
+function stripPhotosFromProject(p) {
+  return {
+    ...p, rooms: p.rooms.map(r => ({
+      ...r, groups: r.groups.map(g => ({
+        ...g, items: g.items.map(i => ({ ...i, photos:[] })),
+        groupPhotos: [],
+      }))
+    }))
+  };
+}
+
 function saveState() {
   try {
     const toSave = {
@@ -419,23 +475,45 @@ function saveState() {
       activeRoomId: state.activeRoomId,
       activeGroupKey: state.activeGroupKey,
     };
-    // strip photos if over quota
     try {
       localStorage.setItem(SK, JSON.stringify(toSave));
     } catch(e) {
-      // storage quota exceeded — save without photos
-      const stripped = { ...toSave, projects: state.projects.map(p => ({
-        ...p, rooms: p.rooms.map(r => ({
-          ...r, groups: r.groups.map(g => ({
-            ...g, items: g.items.map(i => ({ ...i, photos:[] })),
-            groupPhotos: [],
-          }))
-        }))
-      })) };
-      localStorage.setItem(SK, JSON.stringify(stripped));
+      // Storage quota exceeded. First, try dropping photos from only the
+      // project currently being worked on (least destructive) — other
+      // projects' photos are left untouched.
+      const activeId = state.activeProjectId;
+      const scoped = { ...toSave, projects: state.projects.map(p =>
+        p.id === activeId ? stripPhotosFromProject(p) : p
+      ) };
+      try {
+        localStorage.setItem(SK, JSON.stringify(scoped));
+        state.projects = scoped.projects;
+        showToast('Storage is nearly full — photos for the current project could not be saved. Export this project soon to back up your data, or delete older projects to free up space.');
+      } catch(e2) {
+        // Still over quota — fall back to stripping photos from every project.
+        const stripped = { ...toSave, projects: state.projects.map(stripPhotosFromProject) };
+        localStorage.setItem(SK, JSON.stringify(stripped));
+        state.projects = stripped.projects;
+        showToast('Storage is full — photos across all projects could not be saved. Export your projects now to avoid losing photo data, then delete old projects to free up space.');
+      }
     }
     localStorage.setItem(SK_GLOBAL, JSON.stringify({ priceOverrides: state.globalPriceOverrides }));
   } catch(e) { console.error('saveState:', e); }
+}
+
+let _toastTimer = null;
+function showToast(msg) {
+  const banner = document.getElementById('toast-banner');
+  const msgEl = document.getElementById('toast-banner-msg');
+  if (!banner || !msgEl) return;
+  msgEl.textContent = msg;
+  banner.classList.remove('hidden');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(hideToast, 10000);
+}
+function hideToast() {
+  document.getElementById('toast-banner')?.classList.add('hidden');
+  clearTimeout(_toastTimer);
 }
 
 function setState(patch, skipRender) {
@@ -475,21 +553,24 @@ async function compressPhoto(file) {
 
 let tesseractLoaded = false;
 async function runOCR(dataUrl) {
-  if (!tesseractLoaded) {
-    await new Promise((res, rej) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-    tesseractLoaded = true;
-  }
   try {
+    if (!tesseractLoaded) {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+        s.onload = res; s.onerror = () => rej(new Error('tesseract script failed to load'));
+        document.head.appendChild(s);
+      });
+      tesseractLoaded = true;
+    }
     const worker = await Tesseract.createWorker('eng');
     const { data: { text } } = await worker.recognize(dataUrl);
     await worker.terminate();
     return text;
-  } catch(e) { return null; }
+  } catch(e) {
+    // Not fatal — likely offline with assets not yet cached. Fails silently.
+    return null;
+  }
 }
 
 function parseSerial(text) {
@@ -562,6 +643,13 @@ function getProgress(project) {
   return { reviewed, total, pct: total ? Math.round(reviewed / total * 100) : 0 };
 }
 
+function getProjectStatus(project) {
+  if (!project.walkthroughStartedAt) return { key:'not_started', label:'Not Started', classes:'bg-slate-100 text-slate-500' };
+  const pct = getProgress(project).pct;
+  if (pct >= 100) return { key:'complete', label:'Complete', classes:'bg-green-100 text-green-700' };
+  return { key:'in_progress', label:'In Progress', classes:'bg-amber-100 text-amber-700' };
+}
+
 function createGroupState(groupKey) {
   return { key: groupKey, reviewed: false, noActionNeeded: false, items: [], groupPhotos: [] };
 }
@@ -571,8 +659,27 @@ function createRoom(type, label, order) {
   return {
     id: uid(), type, label, order,
     condition: null,
+    notes: '',
     groups: rt.groupKeys.map(k => createGroupState(k)),
   };
+}
+
+function setRoomNotes(projectId, roomId, notes) {
+  updateProject(projectId, p => {
+    const room = p.rooms.find(r => r.id === roomId);
+    if (room) room.notes = notes;
+  });
+}
+
+function setProjectNotes(projectId, notes) {
+  updateProject(projectId, p => { p.notes = notes; });
+}
+
+function renameProject(projectId, newName) {
+  const name = (newName || '').trim();
+  if (!name) return;
+  updateProject(projectId, p => { p.name = name; });
+  render();
 }
 
 function createProject(name, address, roomConfigs) {
@@ -844,6 +951,18 @@ function runSparkCheck(project) {
     });
   });
 
+  // ── Warning: Line total below catalog minimum ──
+  project.rooms.forEach(room => {
+    room.groups.forEach(g => {
+      g.items.forEach(item => {
+        const cat = item.catalogId ? CATALOG[item.catalogId] : null;
+        if (cat?.min && item.qty > 0 && (item.qty * item.unitCost) < cat.min) {
+          issues.push({ level:'warning', msg:`"${item.name}" in ${room.label} totals ${fmt(item.qty * item.unitCost)}, below the typical minimum of ${fmt(cat.min)}`, roomId: room.id, groupKey: g.key });
+        }
+      });
+    });
+  });
+
   // ── Info: Exterior photos missing ──
   const extRoom = project.rooms.find(r => r.type === 'exterior');
   if (extRoom) {
@@ -906,6 +1025,7 @@ function buildExcel(project) {
     ['Address', project.address || '—'],
     ['Date', new Date().toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })],
     ['Total Estimate', getProjectTotal(project)],
+    ...(project.notes && project.notes.trim() ? [[], ['Project Notes', project.notes.trim()]] : []),
     [],
     ['DEAL ANALYZER'],
     ['ARV', project.dealAnalyzer?.arv || 0],
@@ -925,8 +1045,13 @@ function buildExcel(project) {
 
   // ── One sheet per room ──
   project.rooms.forEach(room => {
-    const rows = [['Group', 'Item', 'Qty', 'Unit', 'Unit Cost', 'Line Total', 'Notes']];
+    const rows = [];
+    if (room.condition) rows.push(['Condition', room.condition.toUpperCase()]);
+    if (room.notes && room.notes.trim()) rows.push(['Room Notes', room.notes.trim()]);
+    if (rows.length) rows.push([]);
+    rows.push(['Group', 'Item', 'Qty', 'Unit', 'Unit Cost', 'Line Total', 'Notes']);
     let hasItems = false;
+    let roomTotal = 0;
     room.groups.forEach(g => {
       const groupDef = GROUPS[g.key];
       if (g.noActionNeeded) {
@@ -935,6 +1060,7 @@ function buildExcel(project) {
       } else {
         g.items.forEach(item => {
           const lineTot = (item.qty || 0) * (item.unitCost || 0);
+          roomTotal += lineTot;
           rows.push([
             groupDef?.label || g.key,
             item.name,
@@ -949,8 +1075,19 @@ function buildExcel(project) {
       }
     });
     if (hasItems) {
+      rows.push([]);
+      rows.push(['', '', '', '', 'ROOM TOTAL', roomTotal, '']);
+    }
+    if (hasItems || (room.notes && room.notes.trim()) || room.condition) {
       const sheet = XLSX.utils.aoa_to_sheet(rows);
       sheet['!cols'] = [{ wch:20 },{ wch:36 },{ wch:8 },{ wch:14 },{ wch:12 },{ wch:12 },{ wch:30 }];
+      if (hasItems) {
+        const totalRowNum = rows.length; // 1-indexed Excel row for the last pushed row
+        ['E','F'].forEach(col => {
+          const ref = `${col}${totalRowNum}`;
+          if (sheet[ref]) sheet[ref].s = { font: { bold: true } };
+        });
+      }
       XLSX.utils.book_append_sheet(wb, sheet, room.label.substring(0, 31));
     }
   });
@@ -1001,6 +1138,7 @@ async function exportZip(project) {
     `Address: ${project.address || '—'}`,
     `Date: ${new Date().toLocaleDateString()}`,
     `Total Estimate: ${fmt(getProjectTotal(project))}`,
+    ...(project.notes && project.notes.trim() ? ['', `Project Notes: ${project.notes.trim()}`] : []),
     ``,
     `DEAL ANALYZER`,
     `Max Offer: ${fmt(deal?.maxOffer || 0)}`,
@@ -1049,9 +1187,14 @@ function render() {
 }
 
 function renderHeader(title, showMenu = true, showBack = false, backView = 'walkthrough') {
-  const project = activeProject();
+  // The dashboard is a list of ALL projects, so it must never show a specific
+  // project's name as a subtitle — only per-project screens (walkthrough,
+  // room groups, sparkcheck, etc.) should reflect the active project.
+  const isDashboard = title === 'Spark Estimator';
+  const project = isDashboard ? null : activeProject();
   const total = project ? getProjectTotal(project) : 0;
   const issues = project ? runSparkCheck(project).filter(i => i.level === 'critical').length : 0;
+  const isProjectTitle = project && showMenu && title === project.name;
   return `
     <div class="flex-shrink-0 bg-slate-900 text-white pt-safe">
       <div class="flex items-center gap-3 px-4 py-3">
@@ -1060,14 +1203,17 @@ function renderHeader(title, showMenu = true, showBack = false, backView = 'walk
           <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><rect y="2" width="18" height="2" rx="1"/><rect y="8" width="18" height="2" rx="1"/><rect y="14" width="18" height="2" rx="1"/></svg>
         </button>` : ''}
         <div class="flex-1 min-w-0">
-          <p class="font-bold text-base leading-tight truncate">${esc(title)}</p>
-          ${project && showMenu ? `<p class="text-xs text-slate-400 truncate">${esc(project.name)}</p>` : ''}
+          <div class="flex items-center gap-1.5">
+            <p class="font-bold text-base leading-tight truncate">${esc(title)}</p>
+            ${isProjectTitle ? `<button onclick="openRenameModal('${project.id}')" class="text-slate-400 text-xs flex-shrink-0">✏</button>` : ''}
+          </div>
+          ${project && showMenu && !isProjectTitle ? `<p class="text-xs text-slate-400 truncate">${esc(project.name)}</p>` : ''}
         </div>
         ${issues > 0 ? `<button onclick="navigate('sparkcheck')" class="flex items-center gap-1 bg-red-500/20 border border-red-500/30 rounded-full px-2.5 py-1 badge-pulse">
           <span class="text-red-400 text-xs">⚠</span>
           <span class="text-red-400 text-xs font-bold">${issues}</span>
         </button>` : ''}
-        ${project && total > 0 ? `<div class="text-right">
+        ${project ? `<div class="text-right flex-shrink-0">
           <p class="text-xs text-slate-400">Total</p>
           <p class="text-sm font-bold text-orange-400 tabular-nums">${fmt(total)}</p>
         </div>` : ''}
@@ -1129,14 +1275,18 @@ function renderDashboard() {
             const total = getProjectTotal(p);
             const issues = runSparkCheck(p);
             const crits = issues.filter(i => i.level === 'critical').length;
-            const condColor = { green:'bg-green-500', yellow:'bg-amber-400', red:'bg-red-500' };
             const deal = analyzeDeal(p);
+            const status = getProjectStatus(p);
+            const showDealPill = deal && deal.confidence !== 'red' && p.dealAnalyzer?.arv > 0;
             return `
               <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden" onclick="setState({activeProjectId:'${p.id}',view:'walkthrough'})">
                 <div class="p-4">
                   <div class="flex items-start justify-between gap-3 mb-3">
                     <div class="flex-1 min-w-0">
-                      <p class="font-bold text-slate-900 text-base leading-tight truncate">${esc(p.name)}</p>
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <p class="font-bold text-slate-900 text-base leading-tight truncate">${esc(p.name)}</p>
+                        <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${status.classes}">${status.label}</span>
+                      </div>
                       ${p.address ? `<p class="text-xs text-slate-400 mt-0.5 truncate">${esc(p.address)}</p>` : ''}
                     </div>
                     <div class="text-right flex-shrink-0">
@@ -1150,13 +1300,15 @@ function renderDashboard() {
                     </div>
                     <span class="text-xs text-slate-400 font-medium tabular-nums">${prog.pct}%</span>
                   </div>
-                  <div class="flex items-center gap-3">
+                  <div class="flex items-center gap-2 flex-wrap">
                     <span class="text-xs text-slate-400">${prog.reviewed}/${prog.total} groups</span>
-                    ${crits > 0 ? `<span class="text-xs text-red-500 font-semibold">⚠ ${crits} critical</span>` : prog.pct === 100 ? `<span class="text-xs text-green-600 font-semibold">✓ Complete</span>` : ''}
-                    ${deal && deal.confidence !== 'red' && p.dealAnalyzer?.arv > 0 ? `<span class="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full ${deal.confidence === 'green' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}">${deal.confidence === 'green' ? '🟢' : '🟡'} ${deal.confidence}</span>` : ''}
+                    ${crits > 0 ? `<button onclick="event.stopPropagation();setState({activeProjectId:'${p.id}',view:'sparkcheck'})" class="ml-auto flex items-center gap-1 text-xs text-red-600 font-semibold bg-red-50 border border-red-100 rounded-full px-2.5 py-1">⚠ ${crits} critical <span class="text-red-300">›</span></button>` : ''}
+                    ${!crits && showDealPill ? `<button onclick="event.stopPropagation();setState({activeProjectId:'${p.id}',view:'deal-analyzer'})" class="ml-auto flex items-center gap-1 text-xs font-semibold rounded-full px-2.5 py-1 border ${deal.confidence === 'green' ? 'bg-green-50 text-green-700 border-green-100' : 'bg-amber-50 text-amber-700 border-amber-100'}">${deal.confidence === 'green' ? '🟢' : '🟡'} ${deal.confidence} deal <span class="opacity-40">›</span></button>` : ''}
                   </div>
                 </div>
                 <div class="border-t border-slate-50 flex">
+                  <button onclick="event.stopPropagation();openRenameModal('${p.id}')" class="flex-1 py-2.5 text-xs text-slate-400 font-medium">✏ Rename</button>
+                  <div class="w-px bg-slate-50"></div>
                   <button onclick="event.stopPropagation();duplicateProject('${p.id}')" class="flex-1 py-2.5 text-xs text-slate-400 font-medium">Duplicate</button>
                   <div class="w-px bg-slate-50"></div>
                   <button onclick="event.stopPropagation();confirmDelete('${p.id}')" class="flex-1 py-2.5 text-xs text-red-400 font-medium">Delete</button>
@@ -1202,18 +1354,36 @@ function renderProjectSetup() {
             <div>
               <label class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Bedrooms</label>
               <div class="flex gap-2 mt-2">
-                ${[0,1,2,3,4,5].map(n => `<button onclick="setRoomCount('bedroom',${n})" id="bd-${n}"
-                  class="flex-1 py-2 rounded-xl border-2 text-sm font-semibold transition-colors
-                  ${n===_roomCounts.bedroom ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}">${n}</button>`).join('')}
+                ${[0,1,2,3,4,5].map(n => `<button onclick="setRoomCount('bedroom',${n})" data-val="${n}"
+                  class="room-preset-bd flex-1 py-2 rounded-xl border-2 text-sm font-semibold transition-colors
+                  ${n===_roomCounts.bedroom && _roomCounts.bedroom<=5 ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}">${n}</button>`).join('')}
               </div>
+              <div id="bd-manual-wrap" class="mt-2 ${_roomCounts.bedroom > 5 ? '' : 'hidden'}">
+                <label class="text-xs text-slate-400">Custom number of bedrooms</label>
+                <input type="number" inputmode="numeric" min="0" id="bd-manual" placeholder="e.g. 8"
+                  value="${_roomCounts.bedroom > 5 ? _roomCounts.bedroom : ''}"
+                  oninput="setRoomCountManual('bedroom',this.value)"
+                  class="mt-1 w-full border-2 border-brand/40 rounded-xl px-3 py-2 text-sm font-semibold text-center tabular-nums focus:border-brand text-slate-900" />
+              </div>
+              <button type="button" onclick="revealManualCount('bedroom')" id="bd-manual-btn"
+                class="text-xs text-brand font-semibold mt-1.5 ${_roomCounts.bedroom > 5 ? 'hidden' : ''}">Enter a custom number of bedrooms →</button>
             </div>
             <div>
               <label class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Bathrooms</label>
               <div class="flex gap-2 mt-2">
-                ${[0,1,2,3,4].map(n => `<button onclick="setRoomCount('bathroom',${n})" id="ba-${n}"
-                  class="flex-1 py-2 rounded-xl border-2 text-sm font-semibold transition-colors
-                  ${n===_roomCounts.bathroom ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}">${n}</button>`).join('')}
+                ${[0,1,2,3,4].map(n => `<button onclick="setRoomCount('bathroom',${n})" data-val="${n}"
+                  class="room-preset-ba flex-1 py-2 rounded-xl border-2 text-sm font-semibold transition-colors
+                  ${n===_roomCounts.bathroom && _roomCounts.bathroom<=4 ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}">${n}</button>`).join('')}
               </div>
+              <div id="ba-manual-wrap" class="mt-2 ${_roomCounts.bathroom > 4 ? '' : 'hidden'}">
+                <label class="text-xs text-slate-400">Custom number of bathrooms</label>
+                <input type="number" inputmode="numeric" min="0" id="ba-manual" placeholder="e.g. 6"
+                  value="${_roomCounts.bathroom > 4 ? _roomCounts.bathroom : ''}"
+                  oninput="setRoomCountManual('bathroom',this.value)"
+                  class="mt-1 w-full border-2 border-brand/40 rounded-xl px-3 py-2 text-sm font-semibold text-center tabular-nums focus:border-brand text-slate-900" />
+              </div>
+              <button type="button" onclick="revealManualCount('bathroom')" id="ba-manual-btn"
+                class="text-xs text-brand font-semibold mt-1.5 ${_roomCounts.bathroom > 4 ? 'hidden' : ''}">Enter a custom number of bathrooms →</button>
             </div>
             <div class="grid grid-cols-2 gap-3">
               ${['kitchen','living','interior-general','exterior','systems'].map(type => {
@@ -1228,11 +1398,14 @@ function renderProjectSetup() {
               }).join('')}
             </div>
           </div>
+
+          <p id="room-total-count" class="text-xs font-semibold text-brand text-center mt-4 pt-3 border-t border-slate-100">${computeRoomTotal()} rooms total</p>
         </div>
 
         <button onclick="createProjectAndStart()" class="w-full py-4 bg-brand text-white font-bold text-base rounded-2xl shadow-sm">
-          Start Walkthrough →
+          Create Project
         </button>
+        <p class="text-xs text-slate-400 text-center mt-3">You can start the walkthrough and edit rooms anytime after creating.</p>
       </div>
     </div>`;
 }
@@ -1243,11 +1416,37 @@ const _roomToggles = { kitchen:true, living:true, 'interior-general':false, exte
 
 function setRoomCount(type, n) {
   _roomCounts[type] = n;
-  document.querySelectorAll(`[id^="${type === 'bedroom' ? 'bd' : 'ba'}-"]`).forEach(btn => {
-    const val = parseInt(btn.id.split('-')[1]);
+  const prefix = type === 'bedroom' ? 'bd' : 'ba';
+  document.querySelectorAll(`.room-preset-${prefix}`).forEach(btn => {
+    const val = parseInt(btn.dataset.val);
     btn.className = btn.className.replace(/border-brand bg-brand\/5 text-brand|border-slate-200 text-slate-600/g, '');
     btn.classList.add(...(val === n ? ['border-brand','bg-brand/5','text-brand'] : ['border-slate-200','text-slate-600']));
   });
+  // picking a preset cancels any custom amount that was being entered
+  const manualInput = document.getElementById(`${prefix}-manual`);
+  if (manualInput) manualInput.value = '';
+  document.getElementById(`${prefix}-manual-wrap`)?.classList.add('hidden');
+  document.getElementById(`${prefix}-manual-btn`)?.classList.remove('hidden');
+  updateRoomTotal();
+}
+
+function revealManualCount(type) {
+  const prefix = type === 'bedroom' ? 'bd' : 'ba';
+  document.getElementById(`${prefix}-manual-wrap`)?.classList.remove('hidden');
+  document.getElementById(`${prefix}-manual-btn`)?.classList.add('hidden');
+  document.getElementById(`${prefix}-manual`)?.focus();
+}
+
+function setRoomCountManual(type, value) {
+  const n = Math.max(0, parseInt(value) || 0);
+  _roomCounts[type] = n;
+  const prefix = type === 'bedroom' ? 'bd' : 'ba';
+  // typing a custom amount deselects the presets
+  document.querySelectorAll(`.room-preset-${prefix}`).forEach(btn => {
+    btn.className = btn.className.replace(/border-brand bg-brand\/5 text-brand|border-slate-200 text-slate-600/g, '');
+    btn.classList.add('border-slate-200','text-slate-600');
+  });
+  updateRoomTotal();
 }
 
 function toggleRoomType(type) {
@@ -1260,6 +1459,18 @@ function toggleRoomType(type) {
       btn.className = btn.className.replace('border-brand bg-brand/5 text-brand','border-slate-200 text-slate-600');
     }
   }
+  updateRoomTotal();
+}
+
+function computeRoomTotal() {
+  let n = _roomCounts.bedroom + _roomCounts.bathroom;
+  ['kitchen','living','interior-general','exterior','systems'].forEach(type => { if (_roomToggles[type]) n++; });
+  return n;
+}
+
+function updateRoomTotal() {
+  const el = document.getElementById('room-total-count');
+  if (el) el.textContent = `${computeRoomTotal()} rooms total`;
 }
 
 function createProjectAndStart() {
@@ -1278,9 +1489,16 @@ function createProjectAndStart() {
   for (let i = 0; i < _roomCounts.bathroom; i++) roomConfigs.push({ type:'bathroom' });
   if (_roomToggles.systems) roomConfigs.push({ type:'systems' });
   const project = createProject(name, addr, roomConfigs);
-  project.walkthroughStartedAt = Date.now();
+  // Walkthrough is not auto-started — the agent taps "Start Walkthrough" on the project screen.
   state.projects.push(project);
   setState({ activeProjectId: project.id, view:'walkthrough' });
+}
+
+function startWalkthrough() {
+  const project = activeProject();
+  if (!project) return;
+  updateProject(project.id, p => { p.walkthroughStartedAt = Date.now(); });
+  render();
 }
 
 // ── WALKTHROUGH ──
@@ -1291,7 +1509,8 @@ function renderWalkthrough() {
   const prog = getProgress(project);
   const issues = runSparkCheck(project);
   const crits = issues.filter(i => i.level === 'critical');
-  const duration = project.walkthroughStartedAt
+  const started = !!project.walkthroughStartedAt;
+  const duration = started
     ? Date.now() - project.walkthroughStartedAt + (project.walkthroughDuration || 0)
     : 0;
 
@@ -1301,21 +1520,26 @@ function renderWalkthrough() {
       <!-- Progress card -->
       <div class="px-4 pt-4 pb-2 fade-in">
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center justify-between mb-2.5">
             <div>
-              <p class="text-sm font-bold text-slate-800">${prog.pct}% Complete</p>
+              <p class="text-sm font-bold text-slate-800">${started ? prog.pct + '% Complete' : 'Ready to start'}</p>
               <p class="text-xs text-slate-400">${prog.reviewed} of ${prog.total} groups reviewed</p>
             </div>
             <div class="text-right">
               <p class="text-xl font-bold text-slate-900 tabular-nums">${fmt(getProjectTotal(project))}</p>
-              ${duration > 60000 ? `<p class="text-xs text-slate-400">⏱ ${formatDuration(duration)}</p>` : ''}
+              ${started && duration > 60000 ? `<p class="text-xs text-slate-400">⏱ ${formatDuration(duration)}</p>` : ''}
             </div>
           </div>
-          <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
-            <div class="progress-bar-fill h-full bg-brand rounded-full" style="width:${prog.pct}%"></div>
+          <!-- Progress bar (always on top, easy to read) -->
+          <div class="flex items-center gap-2">
+            <div class="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+              <div class="progress-bar-fill h-full bg-brand rounded-full" style="width:${prog.pct}%"></div>
+            </div>
+            <span class="text-xs font-bold text-slate-500 tabular-nums w-9 text-right">${prog.pct}%</span>
           </div>
-          ${crits.length > 0 ? `<button onclick="navigate('sparkcheck')" class="mt-3 w-full py-2 bg-red-50 rounded-xl text-xs font-semibold text-red-600 border border-red-100">⚠ ${crits.length} critical issue${crits.length > 1 ? 's' : ''} — tap to review</button>` : ''}
-          ${prog.pct === 100 ? `<button onclick="navigate('export')" class="mt-3 w-full py-2.5 bg-brand rounded-xl text-sm font-bold text-white">Export Estimate →</button>` : ''}
+          ${!started ? `<button onclick="startWalkthrough()" class="mt-3 w-full py-3 bg-brand rounded-xl text-sm font-bold text-white flex items-center justify-center gap-1.5">▶ Start Walkthrough</button>` : ''}
+          ${started && crits.length > 0 ? `<button onclick="navigate('sparkcheck')" class="mt-3 w-full py-2 bg-red-50 rounded-xl text-xs font-semibold text-red-600 border border-red-100">⚠ ${crits.length} critical issue${crits.length > 1 ? 's' : ''} — tap to review</button>` : ''}
+          ${started && prog.pct === 100 ? `<button onclick="navigate('export')" class="mt-3 w-full py-2.5 bg-brand rounded-xl text-sm font-bold text-white">Export Estimate →</button>` : ''}
         </div>
       </div>
 
@@ -1398,6 +1622,17 @@ function renderRoomGroups() {
           </div>
         </div>
 
+        <!-- Room Notes -->
+        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mb-3">
+          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Room Notes</p>
+          <textarea
+            placeholder="Add notes for ${esc(room.label)} — e.g. water stain on ceiling, tenant belongings, access issues…"
+            rows="2"
+            class="w-full border-2 border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:border-brand text-slate-900 resize-none leading-snug"
+            onchange="setRoomNotes('${project.id}','${room.id}',this.value)"
+          >${esc(room.notes || '')}</textarea>
+        </div>
+
         <!-- Group list -->
         <div class="space-y-2">
           ${room.groups.map(g => {
@@ -1478,6 +1713,7 @@ function renderGroupDetail() {
 
         <!-- Item list -->
         <div class="mx-4 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mt-2 mb-3">
+          ${catalogItemIds.length === 0 && groupState.items.length === 0 ? `<p class="text-xs text-slate-400 text-center py-6 px-4">No standard items for this room. Use <span class="text-brand font-semibold">Add Custom Item</span> below to add repairs.</p>` : ''}
           ${catalogItemIds.map(catId => {
             const cat = CATALOG[catId];
             if (!cat) return '';
@@ -1530,7 +1766,10 @@ function renderGroupDetail() {
                           class="w-8 h-8 bg-red-50 rounded-xl flex items-center justify-center text-red-400 text-xs font-bold">✕</button>
                       </div>
                       ${selected.serialNumber ? `<p class="mt-1.5 text-xs text-brand font-semibold">🔑 S/N: ${esc(selected.serialNumber)}</p>` : ''}
-                      ${selected.notes ? `<p class="mt-1 text-xs text-slate-400 italic">${esc(selected.notes)}</p>` : ''}
+                      ${cat.min && selected.qty > 0 && (selected.qty * selected.unitCost) < cat.min ? `<p class="mt-1.5 text-xs text-amber-600 font-medium">⚠ Below typical minimum of ${fmt(cat.min)} for this item</p>` : ''}
+                      <input type="text" value="${esc(selected.notes || '')}" placeholder="Add a note (optional)…"
+                        class="mt-2 w-full text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 focus:outline-none focus:border-brand placeholder:text-slate-300"
+                        onchange="setItemNotes('${project.id}','${room.id}','${state.activeGroupKey}','${selected.id}',this.value)" />
                       ${selected.photos?.length > 0 ? `
                         <div class="flex gap-2 mt-2 flex-wrap">
                           ${selected.photos.map(ph => `
@@ -1572,6 +1811,9 @@ function renderGroupDetail() {
                       </div>
                       <button onclick="handleDeleteItem('${project.id}','${room.id}','${state.activeGroupKey}','${item.id}')" class="w-8 h-8 bg-red-50 rounded-xl flex items-center justify-center text-red-400 text-xs">✕</button>
                     </div>
+                    <input type="text" value="${esc(item.notes || '')}" placeholder="Add a note (optional)…"
+                      class="mt-2 w-full text-xs text-slate-600 bg-white border border-slate-100 rounded-lg px-3 py-2 focus:outline-none focus:border-brand placeholder:text-slate-300"
+                      onchange="setItemNotes('${project.id}','${room.id}','${state.activeGroupKey}','${item.id}',this.value)" />
                   </div>
                 </div>
               </div>`;
@@ -1581,8 +1823,9 @@ function renderGroupDetail() {
         <!-- Add custom item + group photos -->
         <div class="px-4 space-y-2 mb-4">
           <button onclick="openCustomModal('${project.id}','${room.id}','${state.activeGroupKey}')"
-            class="w-full py-3 rounded-xl border-2 border-dashed border-slate-200 text-slate-400 text-sm font-medium">
-            + Add Custom Item
+            class="w-full py-3.5 rounded-xl bg-brand/10 border-2 border-brand/30 text-brand text-sm font-bold flex items-center justify-center gap-2">
+            <span class="w-5 h-5 rounded-full bg-brand text-white flex items-center justify-center text-sm leading-none">＋</span>
+            <span>Add Custom Item</span>
           </button>
 
           <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
@@ -1945,6 +2188,21 @@ function renderRoomSetup() {
     ${renderHeader('Edit Rooms', false, true, 'walkthrough')}
     <div class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-24 fade-in">
+
+        <!-- Project Details -->
+        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mb-4">
+          <h3 class="font-semibold text-slate-800 mb-3">Project Details</h3>
+          <p class="font-bold text-slate-900 text-sm mb-0.5">${esc(project.name)}</p>
+          <p class="text-xs text-slate-400 mb-3">${esc(project.address) || 'No address set'}</p>
+          <label class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Project Notes</label>
+          <textarea
+            placeholder="General notes about this property — access instructions, seller info, overall condition…"
+            rows="3"
+            class="mt-1.5 w-full border-2 border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:border-brand text-slate-900 resize-none leading-snug"
+            onchange="setProjectNotes('${project.id}',this.value)"
+          >${esc(project.notes || '')}</textarea>
+        </div>
+
         <p class="text-xs text-slate-400 mb-4 text-center">Current room structure for this project</p>
         <div class="space-y-2 mb-4">
           ${project.rooms.map(room => {
@@ -1957,23 +2215,28 @@ function renderRoomSetup() {
                   <p class="font-semibold text-slate-900 text-sm">${esc(room.label)}</p>
                   <p class="text-xs text-slate-400">${reviewed}/${room.groups.length} groups reviewed</p>
                 </div>
-                ${room.type !== 'exterior' && room.type !== 'systems' ? `
-                  <button onclick="confirmDeleteRoom('${project.id}','${room.id}','${esc(room.label)}')"
-                    class="w-8 h-8 bg-red-50 rounded-xl flex items-center justify-center text-red-400 text-sm">✕</button>` : ''}
+                <button onclick="confirmDeleteRoom('${project.id}','${room.id}','${esc(room.label)}')"
+                  class="w-8 h-8 bg-red-50 rounded-xl flex items-center justify-center text-red-400 text-sm">✕</button>
               </div>`;
           }).join('')}
         </div>
 
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <h3 class="font-semibold text-slate-800 mb-3">Add Room</h3>
-          <div class="grid grid-cols-2 gap-2">
+          <h3 class="font-semibold text-slate-800 mb-1">Add a Room</h3>
+          <p class="text-xs text-slate-400 mb-3">Add another bedroom or bathroom, or choose a standard section / custom space.</p>
+          <div class="grid grid-cols-2 gap-2 mb-2">
             ${ROOM_TYPES.filter(rt => rt.multi).map(rt => `
-              <button onclick="addRoomInstance('${project.id}','${rt.id}')"
-                class="flex items-center gap-2 p-3 rounded-xl border-2 border-brand/20 bg-brand/5 text-brand text-sm font-medium">
+              <button onclick="addRoomOfType('${project.id}','${rt.id}')"
+                class="flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-brand/30 bg-brand/5 text-brand text-sm font-semibold">
                 <span>${rt.icon}</span>
-                <span>+ ${rt.label}</span>
+                <span>Add ${rt.label}</span>
               </button>`).join('')}
           </div>
+          <button onclick="openRoomModal()"
+            class="w-full flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-brand/40 bg-brand/5 text-brand text-sm font-semibold">
+            <span class="text-base">＋</span>
+            <span>Add Section or Custom Room…</span>
+          </button>
         </div>
 
         <button onclick="navigate('walkthrough')" class="mt-4 w-full py-3.5 bg-brand text-white font-bold rounded-2xl text-sm">
@@ -1983,15 +2246,109 @@ function renderRoomSetup() {
     </div>`;
 }
 
-function addRoomInstance(projectId, type) {
+function sortRoomsByOrder(p) {
+  p.rooms.sort((a, b) =>
+    (ROOM_TYPE_MAP[a.type]?.walkthroughOrder || 99) - (ROOM_TYPE_MAP[b.type]?.walkthroughOrder || 99));
+}
+
+function addRoomOfType(projectId, type) {
   updateProject(projectId, p => {
-    const count = p.rooms.filter(r => r.type === type).length + 1;
     const rt = ROOM_TYPE_MAP[type];
-    const label = `${rt.label} ${count}`;
-    const order = p.rooms.length;
-    p.rooms.push(createRoom(type, label, order));
+    if (!rt) return;
+    let label;
+    if (rt.multi) {
+      const count = p.rooms.filter(r => r.type === type).length + 1;
+      label = `${rt.label} ${count}`;
+    } else {
+      if (p.rooms.some(r => r.type === type)) return; // single-instance already exists
+      label = rt.label;
+    }
+    p.rooms.push(createRoom(type, label, p.rooms.length));
+    sortRoomsByOrder(p);
   });
   render();
+}
+
+function addCustomRoom(projectId, name) {
+  const nm = (name || '').trim();
+  if (!nm) return;
+  updateProject(projectId, p => {
+    p.rooms.push(createRoom('custom', nm, p.rooms.length));
+    sortRoomsByOrder(p);
+  });
+  render();
+}
+
+// ── Add Room modal ──
+function openRoomModal() {
+  const project = activeProject();
+  if (!project) return;
+  const list = document.getElementById('room-modal-list');
+  const prefilled = ROOM_TYPES.map(rt => {
+    const present = !rt.multi && project.rooms.some(r => r.type === rt.id);
+    return `<button ${present ? 'disabled' : ''} onclick="addRoomFromModal('${rt.id}')"
+      class="flex items-center gap-2 p-3 rounded-xl border-2 text-sm font-medium text-left
+      ${present ? 'border-slate-100 text-slate-300' : 'border-brand/20 bg-brand/5 text-brand'}">
+      <span>${rt.icon}</span>
+      <span>${esc(rt.label)}${present ? ' ✓' : ''}</span>
+    </button>`;
+  }).join('');
+  list.innerHTML = `
+    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Standard Rooms & Sections</p>
+    <div class="grid grid-cols-2 gap-2 mb-5">${prefilled}</div>
+    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Custom Room</p>
+    <p class="text-xs text-slate-400 mb-2">Add a space that isn't listed — e.g. Basement, Sunroom, Garage Apartment.</p>
+    <div class="flex gap-2">
+      <input id="custom-room-name" type="text" placeholder="Custom room name"
+        class="flex-1 border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:border-brand text-slate-900"
+        onkeydown="if(event.key==='Enter')addCustomRoomFromModal()" autocomplete="off" />
+      <button onclick="addCustomRoomFromModal()" class="px-5 rounded-xl bg-brand text-white font-semibold text-sm">Add</button>
+    </div>`;
+  const modal = document.getElementById('room-modal');
+  modal.classList.remove('hidden');
+  setTimeout(() => document.getElementById('room-box').classList.add('open'), 10);
+}
+function closeRoomModal() {
+  document.getElementById('room-box').classList.remove('open');
+  setTimeout(() => document.getElementById('room-modal').classList.add('hidden'), 300);
+}
+function addRoomFromModal(type) {
+  const project = activeProject();
+  if (!project) return;
+  closeRoomModal();
+  addRoomOfType(project.id, type);
+}
+function addCustomRoomFromModal() {
+  const project = activeProject();
+  if (!project) return;
+  const name = document.getElementById('custom-room-name')?.value?.trim();
+  if (!name) { document.getElementById('custom-room-name')?.focus(); return; }
+  closeRoomModal();
+  addCustomRoom(project.id, name);
+}
+
+// ── Rename Project Modal ──
+let _renameCtx = null;
+function openRenameModal(projectId) {
+  const project = state.projects.find(p => p.id === projectId);
+  if (!project) return;
+  _renameCtx = projectId;
+  const input = document.getElementById('rename-input');
+  input.value = project.name;
+  const modal = document.getElementById('rename-modal');
+  modal.classList.remove('hidden');
+  setTimeout(() => { document.getElementById('rename-box').classList.add('open'); input.focus(); input.select(); }, 10);
+}
+function closeRenameModal() {
+  document.getElementById('rename-box').classList.remove('open');
+  setTimeout(() => document.getElementById('rename-modal').classList.add('hidden'), 300);
+}
+function saveRename() {
+  const name = document.getElementById('rename-input')?.value?.trim();
+  if (!name || !_renameCtx) { document.getElementById('rename-input')?.focus(); return; }
+  const projectId = _renameCtx;
+  closeRenameModal();
+  renameProject(projectId, name);
 }
 
 // ── SETTINGS ──
@@ -2134,7 +2491,11 @@ async function handlePhotoCapture(event, projectId, roomId, groupKey, lineItemId
 
   render();
 
-  if (needsOCR && navigator.onLine) {
+  if (needsOCR) {
+    // Attempt OCR regardless of connection status: if Tesseract's script/worker
+    // assets were already cached (by the service worker or browser HTTP cache)
+    // from a prior online session, this still works offline. It fails silently
+    // if the assets aren't available yet.
     setTimeout(async () => {
       const text = await runOCR(dataUrl);
       const serial = parseSerial(text);
@@ -2244,6 +2605,7 @@ function savePriceOverride(scope) {
   if (!project || !itemId) return;
   if (scope === 'global') {
     state.globalPriceOverrides[itemId] = val;
+    applyGlobalPriceToProjects(itemId, val);
     saveState();
   } else {
     updateProject(project.id, p => {
@@ -2409,6 +2771,7 @@ function handlePriceCSV(event) {
       const num = parseFloat(cost);
       if (id && !isNaN(num) && CATALOG[id]) {
         state.globalPriceOverrides[id] = num;
+        applyGlobalPriceToProjects(id, num);
         updated++;
       }
     });
@@ -2418,6 +2781,24 @@ function handlePriceCSV(event) {
   };
   reader.readAsText(file);
   event.target.value = '';
+}
+
+// Rolls a global price change out to every already-selected line item
+// across all projects, unless that project has its own per-project
+// override for the same catalog item (project overrides always win).
+function applyGlobalPriceToProjects(itemId, newPrice) {
+  state.projects.forEach(project => {
+    if (project.priceOverrides?.[itemId] !== undefined) return;
+    let touched = false;
+    project.rooms.forEach(room => {
+      room.groups.forEach(g => {
+        g.items.forEach(item => {
+          if (item.catalogId === itemId) { item.unitCost = newPrice; touched = true; }
+        });
+      });
+    });
+    if (touched) project.updatedAt = Date.now();
+  });
 }
 
 function resetGlobalPrices() {
@@ -2473,7 +2854,7 @@ render();
 
 // PWA service worker registration
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
 </script>
