@@ -422,6 +422,7 @@ const QUICK_PROFILES = {
 
 const SK = 'spark_v2';
 const SK_GLOBAL = 'spark_globals_v2';
+const SK_SORT = 'spark_dashboard_sort_v1';
 
 let state = {
   view: 'dashboard',
@@ -1215,7 +1216,7 @@ function renderHeader(title, showMenu = true, showBack = false, backView = 'walk
         </button>` : ''}
         ${project ? `<div class="text-right flex-shrink-0">
           <p class="text-xs text-slate-400">Total</p>
-          <p class="text-sm font-bold text-orange-400 tabular-nums">${fmt(total)}</p>
+          <p class="text-sm font-bold text-orange-400 tabular-nums" data-total-display>${fmt(total)}</p>
         </div>` : ''}
       </div>
     </div>`;
@@ -1252,8 +1253,75 @@ function renderBottomNav() {
 
 // ── DASHBOARD ──
 
+let _dashboardSort = localStorage.getItem(SK_SORT) || 'updated_desc';
+function setDashboardSort(value) {
+  _dashboardSort = value;
+  try { localStorage.setItem(SK_SORT, value); } catch(e) {}
+  render();
+}
+
+function toggleDashboardSortMenu(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('dash-sort-menu');
+  if (!menu) return;
+  const opening = menu.classList.contains('hidden');
+  menu.classList.toggle('hidden');
+  if (opening) {
+    // Defer so this same click doesn't immediately trigger the outside-click close.
+    setTimeout(() => document.addEventListener('click', closeDashboardSortMenu, { once:true }), 0);
+  }
+}
+function closeDashboardSortMenu() {
+  document.getElementById('dash-sort-menu')?.classList.add('hidden');
+}
+
+const DASHBOARD_SORTS = {
+  updated_desc: { label: 'Recently updated', cmp: (a,b) => (b.updatedAt||0) - (a.updatedAt||0) },
+  name_asc:     { label: 'Name (A–Z)',       cmp: (a,b) => a.name.localeCompare(b.name) },
+  status:       { label: 'Status',           cmp: (a,b) => {
+    const order = { in_progress:0, not_started:1, complete:2 };
+    return order[getProjectStatus(a).key] - order[getProjectStatus(b).key] || (b.updatedAt||0) - (a.updatedAt||0);
+  } },
+  total_desc:   { label: 'Total ($ high→low)', cmp: (a,b) => getProjectTotal(b) - getProjectTotal(a) },
+};
+
+function sortProjects(projects, sortKey) {
+  const sorter = DASHBOARD_SORTS[sortKey] || DASHBOARD_SORTS.updated_desc;
+  return [...projects].sort(sorter.cmp);
+}
+
+function getDashboardStats(projects) {
+  const counts = { not_started: 0, in_progress: 0, complete: 0 };
+  projects.forEach(p => { counts[getProjectStatus(p).key]++; });
+  const inProgress = projects.filter(p => getProjectStatus(p).key === 'in_progress');
+  const continueProject = inProgress.length
+    ? inProgress.reduce((a, b) => (b.updatedAt||0) > (a.updatedAt||0) ? b : a)
+    : null;
+  return { total: projects.length, notStarted: counts.not_started, inProgress: counts.in_progress, complete: counts.complete, continueProject };
+}
+
+function renderContinueBanner(p) {
+  const prog = getProgress(p);
+  return `
+    <button onclick="event.stopPropagation();setState({activeProjectId:'${p.id}',view:'walkthrough'})"
+      class="w-full flex items-center gap-3 bg-brand text-white rounded-2xl px-4 py-3 mb-3 shadow-sm text-left">
+      <span class="text-base flex-shrink-0">▶</span>
+      <div class="flex-1 min-w-0">
+        <p class="text-[10px] text-white/70 font-semibold uppercase tracking-wide">Continue where you left off</p>
+        <p class="text-sm font-bold truncate">${esc(p.name)} · ${prog.pct}% done</p>
+      </div>
+      <span class="text-white/60 flex-shrink-0">›</span>
+    </button>`;
+}
+
 function renderDashboard() {
   const projects = state.projects;
+  const stats = getDashboardStats(projects);
+  const sorted = sortProjects(projects, _dashboardSort);
+  const statParts = [`<span class="font-semibold text-slate-600">${stats.total}</span> project${stats.total===1?'':'s'}`];
+  if (stats.inProgress > 0) statParts.push(`<span class="font-semibold text-amber-600">${stats.inProgress}</span> in progress`);
+  if (stats.notStarted > 0) statParts.push(`${stats.notStarted} not started`);
+  if (stats.complete > 0) statParts.push(`<span class="font-semibold text-green-600">${stats.complete}</span> complete`);
   return `
     ${renderHeader('Spark Estimator')}
     <div class="flex-1 scroll-y" id="main-content">
@@ -1269,8 +1337,27 @@ function renderDashboard() {
           <button onclick="navigate('project-setup')" class="bg-brand text-white font-semibold px-8 py-3.5 rounded-xl text-sm">Start a Walkthrough</button>
         </div>
       ` : `
-        <div class="px-4 pb-20 space-y-3 fade-in">
-          ${projects.slice().reverse().map(p => {
+        <div class="px-4 pb-20 fade-in">
+          ${stats.continueProject ? renderContinueBanner(stats.continueProject) : ''}
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <p class="text-xs text-slate-400 leading-snug">${statParts.join(' <span class="text-slate-300">·</span> ')}</p>
+            <div class="relative flex-shrink-0">
+              <button onclick="toggleDashboardSortMenu(event)" id="dash-sort-btn"
+                class="flex items-center gap-1.5 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded-lg pl-2.5 pr-2 py-1.5">
+                <span>${DASHBOARD_SORTS[_dashboardSort].label}</span>
+                <svg width="9" height="9" viewBox="0 0 10 10" fill="none" class="flex-shrink-0 text-slate-400"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div id="dash-sort-menu" class="hidden absolute right-0 top-full mt-1.5 w-44 bg-white rounded-xl border border-slate-100 shadow-lg py-1.5 z-30">
+                ${Object.entries(DASHBOARD_SORTS).map(([key, s]) => `
+                  <button onclick="setDashboardSort('${key}')" class="w-full text-left px-3.5 py-2 text-xs flex items-center justify-between gap-2 ${_dashboardSort===key ? 'text-brand font-semibold' : 'text-slate-600'}">
+                    <span>${s.label}</span>
+                    ${_dashboardSort===key ? '<span class="text-brand flex-shrink-0">✓</span>' : ''}
+                  </button>`).join('')}
+              </div>
+            </div>
+          </div>
+          <div class="space-y-3">
+          ${sorted.map(p => {
             const prog = getProgress(p);
             const total = getProjectTotal(p);
             const issues = runSparkCheck(p);
@@ -1315,6 +1402,7 @@ function renderDashboard() {
                 </div>
               </div>`;
           }).join('')}
+          </div>
         </div>
       `}
     </div>
@@ -2439,7 +2527,10 @@ function handleNAN(projectId, roomId, groupKey) {
 
 function handleQtyChange(projectId, roomId, groupKey, lineItemId, value) {
   setItemQty(projectId, roomId, groupKey, lineItemId, parseFloat(value) || 0);
-  updateTotalBar();
+  // Full re-render on commit (blur/enter) so the header total AND the
+  // group-total card (which may not exist in the DOM yet if it was $0)
+  // both reflect the new amount immediately, not just the line item.
+  render();
 }
 
 function handleYearChange(projectId, roomId, groupKey, lineItemId, value) {
