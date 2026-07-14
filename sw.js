@@ -1,7 +1,7 @@
 // Spark Homes Repair Estimator — Service Worker
 // Cache-first strategy for all static assets
 
-const CACHE_NAME = 'spark-estimator-v3';
+const CACHE_NAME = 'spark-estimator-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -45,6 +45,27 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   // Skip non-GET requests
   if (event.request.method !== 'GET') return;
+
+  const isAppShell = event.request.mode === 'navigate' || event.request.destination === 'document';
+
+  if (isAppShell) {
+    // Network-first for the app shell itself. Cache-first here was the root
+    // cause of agents being stuck on stale builds indefinitely after every
+    // deploy (a new index.html on the server was invisible until the cache
+    // name changed AND the old tab was closed/reopened). Always try the
+    // network first so code changes show up the moment the device is
+    // online; still fall back to cache so the app keeps working offline.
+    event.respondWith(
+      fetch(event.request).then(response => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        }
+        return response;
+      }).catch(() => caches.match(event.request).then(cached => cached || caches.match('./index.html')))
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then(cached => {

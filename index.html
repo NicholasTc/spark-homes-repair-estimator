@@ -10,7 +10,6 @@
   <title>Spark Homes Estimator</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png" />
-  <script>if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});</script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -39,6 +38,8 @@
     .fade-in{animation:fadeIn .18s ease}
     @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
     .progress-bar-fill{transition:width .4s ease}
+    .drag-handle{touch-action:none}
+    .room-order-card{will-change:transform}
     .badge-pulse{animation:pulse 2s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
     .drag-over{border:2px dashed #ea580c !important}
@@ -253,6 +254,18 @@
 
 </div>
 <!-- ═══ END OVERLAY LAYER ═══ -->
+
+<!-- App-update banner — shown when a newer deployed version has taken over
+     in the background, so agents are never silently stuck on stale code. -->
+<div id="update-banner" class="fixed top-0 left-0 right-0 z-[95] hidden pt-safe">
+  <div class="px-3 pt-3">
+    <div class="bg-slate-900 text-white rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 max-w-md mx-auto">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 flex-shrink-0"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+      <p class="text-xs font-medium leading-snug flex-1">A new version of the app is ready.</p>
+      <button onclick="window.location.reload()" class="text-xs font-bold text-slate-900 bg-white px-3 py-1.5 rounded-lg flex-shrink-0">Refresh</button>
+    </div>
+  </div>
+</div>
 
 <!-- Storage / global toast banner -->
 <div id="toast-banner" class="fixed top-0 left-0 right-0 z-[90] hidden pt-safe">
@@ -621,8 +634,9 @@ const ICON_PATHS = {
   'arrow-up':   '<path d="M12 20V4M6 10l6-6 6 6"/>',
   chevron:      '<path d="M9 6l6 6-6 6"/>',
   copy:         '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  grip:         '<circle cx="9" cy="6" r="1.2"/><circle cx="9" cy="12" r="1.2"/><circle cx="9" cy="18" r="1.2"/><circle cx="15" cy="6" r="1.2"/><circle cx="15" cy="12" r="1.2"/><circle cx="15" cy="18" r="1.2"/>',
 };
-const ICON_FILLED = new Set(['play']);
+const ICON_FILLED = new Set(['play', 'grip']);
 function icon(name, cls) {
   const path = ICON_PATHS[name];
   if (!path) return '';
@@ -883,7 +897,11 @@ function formatDuration(ms) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function navigate(view, extra = {}) {
-  setState({ view, ...extra });
+  // Reorder mode is a transient editing state scoped to the walkthrough
+  // room list — leaving that screen should always drop back to normal
+  // browsing so it doesn't silently resurface elsewhere.
+  const reorderMode = view === 'walkthrough' ? state.reorderMode : false;
+  setState({ view, reorderMode, ...extra });
 }
 
 function activeProject() {
@@ -1534,10 +1552,15 @@ function render() {
   const viewFn = views[state.view] || renderDashboard;
   app.innerHTML = viewFn();
   updatePanelList();
+  initRoomReorder();
   requestAnimationFrame(() => {
     const main = document.getElementById('main-content');
     if (main) main.scrollTop = 0;
   });
+}
+
+function toggleReorderMode() {
+  setState({ reorderMode: !state.reorderMode });
 }
 
 function renderHeader(title, showMenu = true, showBack = false, backView = 'walkthrough', opts = {}) {
@@ -2026,9 +2049,15 @@ function renderWalkthrough() {
       <div class="px-4 pb-20 mt-2">
         <div class="flex items-center justify-between px-1 mb-2">
           <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Recommended Order</p>
-          <p class="text-xs text-slate-400 tabular-nums">${project.rooms.filter(r => r.groups.length && r.groups.every(g => g.reviewed)).length}/${project.rooms.length} rooms done</p>
+          ${state.reorderMode
+            ? `<button onclick="toggleReorderMode()" class="text-xs font-bold text-brand">Done</button>`
+            : `<div class="flex items-center gap-3">
+                 <button onclick="toggleReorderMode()" class="text-xs font-semibold text-brand">Reorder</button>
+                 <p class="text-xs text-slate-400 tabular-nums">${project.rooms.filter(r => r.groups.length && r.groups.every(g => g.reviewed)).length}/${project.rooms.length} rooms done</p>
+               </div>`}
         </div>
-        <div class="space-y-2">
+        ${state.reorderMode ? `<p class="px-1 mb-2 text-xs text-slate-400 flex items-center gap-1">${icon('grip', 'w-3.5 h-3.5')} Drag to set your own order — this doesn't change what's required, just the sequence.</p>` : ''}
+        <div class="space-y-2" id="room-order-list">
         ${(() => {
           // "Next up" = the first room in the recommended order that still has
           // unreviewed groups — same room Start Walkthrough / Continue would
@@ -2046,8 +2075,9 @@ function renderWalkthrough() {
           const isNext = room.id === nextRoomId;
           const condColors = { good:'bg-green-100 text-green-700', fair:'bg-amber-100 text-amber-700', poor:'bg-red-100 text-red-700', gut:'bg-red-200 text-red-800' };
           return `
-            <div onclick="setState({activeRoomId:'${room.id}',view:'room-groups'})"
-              class="bg-white rounded-2xl border shadow-sm overflow-hidden ${isNext ? 'border-brand/30 ring-1 ring-brand/15' : 'border-slate-100'}">
+            <div data-room-id="${room.id}"
+              ${state.reorderMode ? '' : `onclick="setState({activeRoomId:'${room.id}',view:'room-groups'})"`}
+              class="room-order-card bg-white rounded-2xl border shadow-sm overflow-hidden ${isNext ? 'border-brand/30 ring-1 ring-brand/15' : 'border-slate-100'}">
               <div class="p-4">
                 <div class="flex items-center gap-3">
                   <span class="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0 tabular-nums ${isNext ? 'bg-brand text-white' : 'bg-slate-100 text-slate-400'}">${idx + 1}</span>
@@ -2066,10 +2096,16 @@ function renderWalkthrough() {
                       <span class="text-xs text-slate-400 tabular-nums">${groupsDone}/${total}</span>
                     </div>
                   </div>
-                  <div class="text-right flex-shrink-0">
-                    ${roomTotal > 0 ? `<p class="text-sm font-bold text-slate-900 tabular-nums">${fmt(roomTotal)}</p>` : ''}
-                    <p class="text-xs text-brand font-semibold mt-0.5">›</p>
-                  </div>
+                  ${state.reorderMode ? `
+                    <button class="drag-handle w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500 flex-shrink-0 active:bg-slate-200" onclick="event.stopPropagation()" aria-label="Drag to reorder">
+                      ${icon('grip', 'w-5 h-5')}
+                    </button>
+                  ` : `
+                    <div class="text-right flex-shrink-0">
+                      ${roomTotal > 0 ? `<p class="text-sm font-bold text-slate-900 tabular-nums">${fmt(roomTotal)}</p>` : ''}
+                      <p class="text-xs text-brand font-semibold mt-0.5">›</p>
+                    </div>
+                  `}
                 </div>
               </div>
             </div>`;
@@ -2822,8 +2858,88 @@ function renderRoomSetup() {
 }
 
 function sortRoomsByOrder(p) {
+  // Once the agent has manually dragged rooms into their own order, never
+  // silently re-sort back to the type-based default — that would wipe out
+  // the customization the moment they add or remove any room.
+  if (p.roomOrderCustomized) return;
   p.rooms.sort((a, b) =>
     (ROOM_TYPE_MAP[a.type]?.walkthroughOrder || 99) - (ROOM_TYPE_MAP[b.type]?.walkthroughOrder || 99));
+}
+
+// Pointer-based drag-to-reorder for the walkthrough room list. Runs after
+// every render (since app.innerHTML fully replaces the DOM each time) and is
+// a no-op unless reorder mode is on. Deliberately avoids calling the
+// framework's render() mid-drag — that would destroy the DOM nodes the drag
+// listeners are attached to. Instead it moves cards purely via CSS
+// transforms and only commits + re-renders once, on release.
+function initRoomReorder() {
+  if (state.view !== 'walkthrough' || !state.reorderMode) return;
+  const list = document.getElementById('room-order-list');
+  const project = activeProject();
+  if (!list || !project) return;
+  const cardEls = Array.from(list.querySelectorAll('.room-order-card'));
+  if (cardEls.length < 2) return;
+  const originalOrder = cardEls.map(el => el.dataset.roomId);
+
+  cardEls.forEach(card => {
+    const handle = card.querySelector('.drag-handle');
+    if (handle) handle.addEventListener('pointerdown', onPointerDown);
+  });
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const card = e.currentTarget.closest('.room-order-card');
+    if (!card) return;
+    const draggedId = card.dataset.roomId;
+    const startIndex = originalOrder.indexOf(draggedId);
+    const startY = e.clientY;
+    const cardHeight = cardEls[1].getBoundingClientRect().top - cardEls[0].getBoundingClientRect().top;
+    let order = [...originalOrder];
+
+    card.style.zIndex = '50';
+    card.style.transition = 'none';
+    card.style.boxShadow = '0 10px 28px rgba(15,23,42,0.18)';
+    document.body.style.userSelect = 'none';
+
+    function applyShifts() {
+      cardEls.forEach(el => {
+        const id = el.dataset.roomId;
+        if (id === draggedId) return;
+        const shift = (order.indexOf(id) - originalOrder.indexOf(id)) * cardHeight;
+        el.style.transition = 'transform .15s ease';
+        el.style.transform = shift ? `translateY(${shift}px)` : '';
+      });
+    }
+
+    function onMove(ev) {
+      const deltaY = ev.clientY - startY;
+      card.style.transform = `translateY(${deltaY}px)`;
+      const rawIndex = startIndex + Math.round(deltaY / cardHeight);
+      const newIndex = Math.max(0, Math.min(order.length - 1, rawIndex));
+      const curIndex = order.indexOf(draggedId);
+      if (newIndex !== curIndex) {
+        order.splice(curIndex, 1);
+        order.splice(newIndex, 0, draggedId);
+        applyShifts();
+      }
+    }
+
+    function onUp() {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = '';
+      updateProject(project.id, p => {
+        const byId = Object.fromEntries(p.rooms.map(r => [r.id, r]));
+        p.rooms = order.map(id => byId[id]).filter(Boolean);
+        p.roomOrderCustomized = true;
+      });
+      render();
+    }
+
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp, { once: true });
+  }
 }
 
 function addRoomOfType(projectId, type) {
@@ -3563,6 +3679,15 @@ render();
 
 // PWA service worker registration
 if ('serviceWorker' in navigator) {
+  // If a SW was already controlling this page load, any later
+  // 'controllerchange' means a newer deployed version just took over in the
+  // background — surface that instead of leaving agents stuck on stale code
+  // until they happen to force-refresh. (No banner on a first-ever visit,
+  // since there's no previous controller to have changed from.)
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController) document.getElementById('update-banner')?.classList.remove('hidden');
+  });
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
