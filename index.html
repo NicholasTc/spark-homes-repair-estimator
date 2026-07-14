@@ -1579,12 +1579,24 @@ function renderHeader(title, showMenu = true, showBack = false, backView = 'walk
           <p class="text-sm font-bold text-orange-400 tabular-nums" data-total-display>${fmt(total)}</p>
         </div>` : ''}
       </div>
-      ${typeof opts.progressPct === 'number' ? `
-        <div class="flex items-center gap-2 px-4 pb-1.5">
-          <div class="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
-            <div class="h-full bg-brand progress-bar-fill rounded-full" style="width:${opts.progressPct}%"></div>
-          </div>
-          <span class="text-[10px] text-slate-500 font-semibold flex-shrink-0 tabular-nums">${opts.progressPct}% overall</span>
+      ${opts.roomProgress || typeof opts.progressPct === 'number' ? `
+        <div class="pb-2 space-y-1">
+          ${opts.roomProgress ? `
+            <button onclick="goToRoom('${opts.roomProgress.roomId}')" class="w-full flex items-center gap-2 px-4 text-left">
+              <span class="text-[11px] font-bold text-white flex-shrink-0 w-16 truncate">${esc(opts.roomProgress.label)}</span>
+              <div class="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                <div class="h-full bg-brand progress-bar-fill rounded-full" style="width:${opts.roomProgress.pct}%"></div>
+              </div>
+              <span class="text-[11px] text-slate-300 font-semibold flex-shrink-0 w-10 text-right tabular-nums">${opts.roomProgress.reviewed}/${opts.roomProgress.total}</span>
+            </button>` : ''}
+          ${typeof opts.progressPct === 'number' ? `
+            <div class="flex items-center gap-2 px-4">
+              <span class="text-[10px] text-slate-500 font-semibold flex-shrink-0 w-16 truncate">Overall</span>
+              <div class="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
+                <div class="h-full bg-slate-400 progress-bar-fill rounded-full" style="width:${opts.progressPct}%"></div>
+              </div>
+              <span class="text-[10px] text-slate-500 font-medium flex-shrink-0 w-10 text-right tabular-nums">${opts.progressPct}%</span>
+            </div>` : ''}
         </div>` : ''}
     </div>`;
 }
@@ -2066,9 +2078,11 @@ function renderRoomGroups() {
   // that's where agents redo near-identical setups room after room.
   const copySiblings = rt?.multi ? project.rooms.filter(r => r.type === room.type && r.id !== room.id) : [];
 
-  // Breadcrumb + dual progress: the header's thin bar is the OVERALL project
-  // progress (ambient, always visible), while the card below is THIS room's
-  // progress (prominent, actionable) — two different questions, two weights.
+  // Breadcrumb + dual progress: the sticky header now carries BOTH bars —
+  // a prominent, named "Exterior · 1/5" bar for THIS room (persists even on
+  // group-detail), and a thin muted "X% overall" bar for the whole project.
+  // Both live in the header (outside the scroll container) so they stay put
+  // as the agent scrolls or drills into groups — no separate body card needed.
   const roomIdx = project.rooms.findIndex(r => r.id === room.id) + 1;
   const roomsTotal = project.rooms.length;
   const overallProg = getProgress(project);
@@ -2079,22 +2093,15 @@ function renderRoomGroups() {
 
   return `
     ${renderHeader(room.label, false, true, 'walkthrough', {
-      subtitle: `${project.name} · Room ${roomIdx} of ${roomsTotal}`,
+      // Most locally-relevant info goes first — if the subtitle line has to
+      // truncate on a long address, it clips the (stable, always-visible-
+      // elsewhere) address, never the room position.
+      subtitle: `Room ${roomIdx} of ${roomsTotal} · ${project.name}`,
       progressPct: overallProg.pct,
+      roomProgress: { label: room.label, reviewed: roomReviewed, total: roomGroupsTotal, pct: roomPct, roomId: room.id },
     })}
     <div class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-24 fade-in">
-        <!-- This room's progress -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mb-3">
-          <div class="flex items-center justify-between mb-2">
-            <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">This Room's Progress</p>
-            <p class="text-xs font-bold text-brand tabular-nums">${roomReviewed}/${roomGroupsTotal} groups</p>
-          </div>
-          <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-            <div class="h-full bg-brand rounded-full progress-bar-fill" style="width:${roomPct}%"></div>
-          </div>
-        </div>
-
         ${copySiblings.length > 0 ? `
           <button onclick="openCopyRoomPicker('${project.id}','${room.id}')"
             class="w-full flex items-center justify-between gap-2 bg-brand/5 border border-brand/20 rounded-2xl p-3.5 mb-3 active:bg-brand/10">
@@ -2162,22 +2169,29 @@ function renderRoomGroups() {
           <span class="text-lg font-bold text-brand tabular-nums">${fmt(roomTotal)}</span>
         </div>` : ''}
 
-        ${nextRoom ? `
-          <button onclick="goToRoom('${nextRoom.id}')" class="mt-4 w-full py-3.5 bg-brand text-white font-bold rounded-2xl text-sm">
-            Continue to ${esc(nextRoom.label)} →
-          </button>
-          <button onclick="navigate('walkthrough')" class="mt-2 w-full py-2 text-center text-xs text-slate-400 font-semibold">
-            ‹ All Rooms
-          </button>
-        ` : overallProg.pct >= 100 ? `
-          <button onclick="navigate('export')" class="mt-4 w-full py-3.5 bg-brand text-white font-bold rounded-2xl text-sm">
-            All Rooms Reviewed — Go to Export →
-          </button>
-        ` : `
-          <button onclick="navigate('walkthrough')" class="mt-4 w-full py-3.5 bg-brand text-white font-bold rounded-2xl text-sm">
-            Save & Back to Walkthrough
-          </button>
-        `}
+        <div class="mt-4 space-y-2">
+          ${roomReviewed < roomGroupsTotal ? `
+            <p class="text-center text-xs text-amber-600 font-semibold flex items-center justify-center gap-1">
+              ${icon('warning', 'w-3.5 h-3.5')} ${roomGroupsTotal - roomReviewed} group${roomGroupsTotal - roomReviewed > 1 ? 's' : ''} in ${esc(room.label)} still need${roomGroupsTotal - roomReviewed > 1 ? '' : 's'} review
+            </p>
+          ` : ''}
+          ${nextRoom ? `
+            <button onclick="goToRoom('${nextRoom.id}')" class="w-full py-3.5 bg-brand text-white font-bold rounded-2xl text-sm">
+              Continue to ${esc(nextRoom.label)} →
+            </button>
+            <button onclick="navigate('walkthrough')" class="w-full py-2 text-center text-xs text-slate-400 font-semibold">
+              ‹ All Rooms
+            </button>
+          ` : overallProg.pct >= 100 ? `
+            <button onclick="navigate('export')" class="w-full py-3.5 bg-brand text-white font-bold rounded-2xl text-sm">
+              All Rooms Reviewed — Go to Export →
+            </button>
+          ` : `
+            <button onclick="navigate('walkthrough')" class="w-full py-3.5 bg-brand text-white font-bold rounded-2xl text-sm">
+              Save & Back to Walkthrough
+            </button>
+          `}
+        </div>
       </div>
     </div>
     ${renderBottomNav()}`;
@@ -2205,6 +2219,8 @@ function renderGroupDetail() {
   const groupIdxInRoom = room.groups.findIndex(g => g.key === state.activeGroupKey);
   const groupsInRoomTotal = room.groups.length;
   const isLastGroupInRoom = groupIdxInRoom === groupsInRoomTotal - 1;
+  const roomReviewed = room.groups.filter(g => g.reviewed).length;
+  const roomPct = groupsInRoomTotal ? Math.round(roomReviewed / groupsInRoomTotal * 100) : 0;
 
   // "What's next" preview so the agent always knows where "Done" takes them.
   let nextHint;
@@ -2220,8 +2236,11 @@ function renderGroupDetail() {
 
   return `
     ${renderHeader(`${room.label} › ${gDef?.label || state.activeGroupKey}`, false, true, 'room-groups', {
-      subtitle: `${project.name} · Room ${roomIdx}/${roomsTotal} · Group ${groupIdxInRoom + 1}/${groupsInRoomTotal}`,
+      // Same priority order as room-groups: position counters first, address
+      // last, so truncation on a long title never eats the Room/Group counts.
+      subtitle: `Group ${groupIdxInRoom + 1}/${groupsInRoomTotal} · Room ${roomIdx}/${roomsTotal} · ${project.name}`,
       progressPct: getProgress(project).pct,
+      roomProgress: { label: room.label, reviewed: roomReviewed, total: groupsInRoomTotal, pct: roomPct, roomId: room.id },
     })}
     <div class="flex-1 scroll-y" id="main-content">
       <div class="pb-24 fade-in">
