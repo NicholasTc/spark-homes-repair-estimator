@@ -69,15 +69,19 @@
 </head>
 <body class="bg-slate-100">
 
-<!-- ═══ OVERLAY LAYER (outside #app — never clobbered by render) ═══ -->
+<!-- ═══ OVERLAY LAYER (outside #app — never clobbered by render) ═══
+     Every modal, sheet, banner and the slide-out project drawer lives here,
+     OUTSIDE the #app container. render() only ever rewrites #app's innerHTML,
+     so keeping these here means an open modal/drawer is never destroyed by a
+     re-render mid-interaction. -->
 <div id="overlay-layer">
 
-  <!-- Side Panel -->
+  <!-- Slide-out project drawer: switch projects, open Settings, or start a new one -->
   <div id="panel-overlay" class="fixed inset-0 bg-black/50 z-40 hidden" onclick="closePanel()"></div>
-  <div id="side-panel" class="fixed top-0 left-0 h-full w-72 bg-white z-50 shadow-2xl -translate-x-full flex flex-col">
+  <nav id="side-panel" aria-label="Projects" class="fixed top-0 left-0 h-full w-72 bg-white z-50 shadow-2xl -translate-x-full flex flex-col">
     <div class="bg-slate-900 text-white px-4 pt-safe pb-4 flex-shrink-0">
       <div class="flex justify-between items-center mt-3">
-        <span class="font-bold text-base tracking-tight">Projects</span>
+        <h2 class="font-bold text-base tracking-tight">Projects</h2>
         <button onclick="closePanel()" class="text-slate-400 w-8 h-8 flex items-center justify-center">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
@@ -91,14 +95,14 @@
       </button>
       <button onclick="closePanel();navigate('project-setup')" class="w-full py-3.5 rounded-xl bg-brand text-white font-semibold text-sm">+ New Project</button>
     </div>
-  </div>
+  </nav>
 
-  <!-- Generic Confirm Modal -->
-  <div id="confirm-modal" class="fixed inset-0 z-[70] hidden">
+  <!-- Generic confirm/delete dialog — reused for every destructive action -->
+  <div id="confirm-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
     <div class="absolute inset-0 bg-black/60" onclick="closeConfirm()"></div>
     <div class="absolute inset-0 flex items-end justify-center p-0 pointer-events-none">
       <div id="confirm-box" class="bg-white rounded-t-2xl w-full max-w-md p-6 pointer-events-auto safe-bottom sheet">
-        <p id="confirm-title" class="font-bold text-slate-900 text-lg mb-2"></p>
+        <h2 id="confirm-title" class="font-bold text-slate-900 text-lg mb-2"></h2>
         <p id="confirm-body" class="text-slate-500 text-sm mb-6"></p>
         <div class="flex gap-3">
           <button onclick="closeConfirm()" class="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm">Cancel</button>
@@ -108,13 +112,13 @@
     </div>
   </div>
 
-  <!-- Price Override Modal -->
-  <div id="price-modal" class="fixed inset-0 z-[70] hidden">
+  <!-- Price override dialog — change one item's unit cost for this project, or globally -->
+  <div id="price-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="price-modal-title">
     <div class="absolute inset-0 bg-black/60" onclick="closePriceModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div id="price-box" class="bg-white rounded-t-2xl w-full max-w-md pointer-events-auto safe-bottom sheet">
         <div class="px-5 pt-5 pb-3 border-b border-slate-100">
-          <p class="font-bold text-slate-900 text-lg" id="price-modal-title">Override Price</p>
+          <h2 class="font-bold text-slate-900 text-lg" id="price-modal-title">Override Price</h2>
           <p class="text-xs text-slate-400 mt-1" id="price-modal-sub"></p>
         </div>
         <div class="px-5 py-5">
@@ -131,8 +135,8 @@
     </div>
   </div>
 
-  <!-- Photo Lightbox -->
-  <div id="photo-lightbox" class="fixed inset-0 z-[80] hidden bg-black/90 flex items-center justify-center p-4">
+  <!-- Full-screen photo viewer (with delete) for any captured photo -->
+  <div id="photo-lightbox" class="fixed inset-0 z-[80] hidden bg-black/90 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Photo viewer">
     <button onclick="closeLightbox()" class="absolute top-4 right-4 text-white w-10 h-10 flex items-center justify-center bg-white/20 rounded-full">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
@@ -140,15 +144,15 @@
     <button id="lightbox-delete" class="absolute bottom-8 left-1/2 -translate-x-1/2 bg-red-500 text-white px-6 py-3 rounded-xl font-semibold text-sm">Delete Photo</button>
   </div>
 
-  <!-- OCR Result Modal -->
-  <div id="ocr-modal" class="fixed inset-0 z-[75] hidden">
+  <!-- Serial-number OCR result dialog — confirm/edit the text pulled off a nameplate photo -->
+  <div id="ocr-modal" class="fixed inset-0 z-[75] hidden" role="dialog" aria-modal="true" aria-labelledby="ocr-title">
     <div class="absolute inset-0 bg-black/60" onclick="closeOcrModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div class="bg-white rounded-t-2xl w-full max-w-md p-5 pointer-events-auto safe-bottom sheet" id="ocr-box">
-        <p class="font-bold text-slate-900 text-base mb-1 flex items-center gap-1.5" id="ocr-title">
+        <h2 class="font-bold text-slate-900 text-base mb-1 flex items-center gap-1.5" id="ocr-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
           <span>Serial Number Detected</span>
-        </p>
+        </h2>
         <p class="text-xs text-slate-400 mb-3" id="ocr-subtitle">Confirm or edit the extracted text</p>
         <input id="ocr-input" type="text" placeholder="Type serial number…" class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-base font-mono focus:border-brand text-slate-900" />
         <div id="ocr-candidates" class="flex flex-wrap items-center gap-1.5 mt-2 empty:mt-0"></div>
@@ -160,12 +164,12 @@
     </div>
   </div>
 
-  <!-- Custom Item Modal -->
-  <div id="custom-modal" class="fixed inset-0 z-[70] hidden">
+  <!-- Add-custom-item dialog — a one-off line item not in the standard catalog -->
+  <div id="custom-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="custom-modal-title">
     <div class="absolute inset-0 bg-black/60" onclick="closeCustomModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div class="bg-white rounded-t-2xl w-full max-w-md p-5 pointer-events-auto safe-bottom sheet" id="custom-box">
-        <p class="font-bold text-slate-900 text-lg mb-4">Add Custom Item</p>
+        <h2 id="custom-modal-title" class="font-bold text-slate-900 text-lg mb-4">Add Custom Item</h2>
         <div class="space-y-3">
           <input id="ci-name" type="text" placeholder="Item name" class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:border-brand" />
           <div class="flex gap-3">
@@ -182,13 +186,13 @@
     </div>
   </div>
 
-  <!-- Quick Profiles Sheet -->
-  <div id="profiles-modal" class="fixed inset-0 z-[70] hidden">
+  <!-- Quick-profiles sheet — one tap fills a group with a common repair template -->
+  <div id="profiles-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="profiles-modal-title">
     <div class="absolute inset-0 bg-black/60" onclick="closeProfilesModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div class="bg-white rounded-t-2xl w-full max-w-md pointer-events-auto safe-bottom sheet" id="profiles-box">
         <div class="px-5 pt-5 pb-3 border-b border-slate-100 flex justify-between">
-          <p class="font-bold text-slate-900 text-base">Quick Profiles</p>
+          <h2 id="profiles-modal-title" class="font-bold text-slate-900 text-base">Quick Profiles</h2>
           <button onclick="closeProfilesModal()" class="text-slate-400 w-6 h-6 flex items-center justify-center">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
@@ -198,12 +202,12 @@
     </div>
   </div>
 
-  <!-- Rename Project Sheet -->
-  <div id="rename-modal" class="fixed inset-0 z-[70] hidden">
+  <!-- Rename-project dialog -->
+  <div id="rename-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="rename-modal-title">
     <div class="absolute inset-0 bg-black/60" onclick="closeRenameModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div class="bg-white rounded-t-2xl w-full max-w-md p-5 pointer-events-auto safe-bottom sheet" id="rename-box">
-        <p class="font-bold text-slate-900 text-lg mb-4">Rename Project</p>
+        <h2 id="rename-modal-title" class="font-bold text-slate-900 text-lg mb-4">Rename Project</h2>
         <input id="rename-input" type="text" placeholder="Project name"
           class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:border-brand text-slate-900"
           autocomplete="off" onkeydown="if(event.key==='Enter')saveRename()" />
@@ -215,16 +219,16 @@
     </div>
   </div>
 
-  <!-- Project Summary Sheet -->
-  <div id="summary-modal" class="fixed inset-0 z-[70] hidden">
+  <!-- Auto-generated plain-language project summary sheet (reused verbatim in the export) -->
+  <div id="summary-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="summary-modal-title">
     <div class="absolute inset-0 bg-black/60" onclick="closeSummaryModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div class="bg-white rounded-t-2xl w-full max-w-md p-5 pointer-events-auto safe-bottom sheet max-h-[80vh] flex flex-col" id="summary-box">
         <div class="flex items-start justify-between gap-3 mb-1 flex-shrink-0">
-          <p class="font-bold text-slate-900 text-lg flex items-center gap-1.5">
+          <h2 id="summary-modal-title" class="font-bold text-slate-900 text-lg flex items-center gap-1.5">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/></svg>
             <span>Summary</span>
-          </p>
+          </h2>
           <button onclick="closeSummaryModal()" class="text-slate-400 w-8 h-8 flex items-center justify-center flex-shrink-0">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
@@ -235,13 +239,13 @@
     </div>
   </div>
 
-  <!-- Add Room Sheet -->
-  <div id="room-modal" class="fixed inset-0 z-[70] hidden">
+  <!-- Add-room sheet — pick a standard section or a custom space to add to the project -->
+  <div id="room-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="room-modal-title">
     <div class="absolute inset-0 bg-black/60" onclick="closeRoomModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div class="bg-white rounded-t-2xl w-full max-w-md pointer-events-auto safe-bottom sheet" id="room-box">
         <div class="px-5 pt-5 pb-3 border-b border-slate-100 flex justify-between items-center">
-          <p class="font-bold text-slate-900 text-base">Add a Room</p>
+          <h2 id="room-modal-title" class="font-bold text-slate-900 text-base">Add a Room</h2>
           <button onclick="closeRoomModal()" class="text-slate-400 w-6 h-6 flex items-center justify-center">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
@@ -251,14 +255,14 @@
     </div>
   </div>
 
-  <!-- Copy Room Setup Sheet -->
-  <div id="copy-room-modal" class="fixed inset-0 z-[70] hidden">
+  <!-- Copy-room-setup sheet — clone item selections from a sibling room of the same type -->
+  <div id="copy-room-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="copy-room-modal-title">
     <div class="absolute inset-0 bg-black/60" onclick="closeCopyRoomModal()"></div>
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
       <div class="bg-white rounded-t-2xl w-full max-w-md pointer-events-auto safe-bottom sheet" id="copy-room-box">
         <div class="px-5 pt-5 pb-3 border-b border-slate-100 flex justify-between items-start">
           <div>
-            <p class="font-bold text-slate-900 text-base">Copy Room Setup</p>
+            <h2 id="copy-room-modal-title" class="font-bold text-slate-900 text-base">Copy Room Setup</h2>
             <p class="text-xs text-slate-400 mt-0.5" id="copy-room-sub">Choose a room to copy from</p>
           </div>
           <button onclick="closeCopyRoomModal()" class="text-slate-400 w-6 h-6 flex items-center justify-center flex-shrink-0">
@@ -275,7 +279,7 @@
 
 <!-- App-update banner — shown when a newer deployed version has taken over
      in the background, so agents are never silently stuck on stale code. -->
-<div id="update-banner" class="fixed top-0 left-0 right-0 z-[95] hidden pt-safe">
+<div id="update-banner" role="status" aria-live="polite" class="fixed top-0 left-0 right-0 z-[95] hidden pt-safe">
   <div class="px-3 pt-3">
     <div class="bg-slate-900 text-white rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 max-w-md mx-auto">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 flex-shrink-0"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
@@ -285,8 +289,8 @@
   </div>
 </div>
 
-<!-- Storage / global toast banner -->
-<div id="toast-banner" class="fixed top-0 left-0 right-0 z-[90] hidden pt-safe">
+<!-- Transient warning banner (e.g. storage full, photo skipped) -->
+<div id="toast-banner" role="alert" aria-live="assertive" class="fixed top-0 left-0 right-0 z-[90] hidden pt-safe">
   <div class="px-3 pt-3">
     <div class="bg-amber-500 text-white rounded-xl shadow-lg px-4 py-3 flex items-start gap-2.5 max-w-md mx-auto">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 flex-shrink-0 mt-0.5"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
@@ -298,6 +302,8 @@
   </div>
 </div>
 
+<!-- Single-page app root. render() swaps this element's innerHTML for the
+     current view; each view supplies its own <header>, <main> and bottom <nav>. -->
 <div id="app" class="h-full flex flex-col"></div>
 
 <script>
@@ -530,6 +536,10 @@ const SK = 'spark_v2';
 const SK_GLOBAL = 'spark_globals_v2';
 const SK_SORT = 'spark_dashboard_sort_v1';
 
+// Single source of truth for the whole app. Everything the user sees is
+// derived from `state`; mutations go through setState() so they're always
+// persisted and re-rendered together. Keys prefixed with `_` are transient
+// UI context (which item a modal is acting on, etc.) and are never saved.
 let state = {
   view: 'dashboard',
   activeProjectId: null,
@@ -543,6 +553,7 @@ let state = {
   _ocrCtx: null,
 };
 
+// Rehydrate state from localStorage on startup (projects + globals + last view).
 function loadState() {
   try {
     const raw = localStorage.getItem(SK);
@@ -562,6 +573,8 @@ function loadState() {
   } catch(e) { console.error('loadState:', e); }
 }
 
+// Returns a copy of a project with all photo data removed — the escape hatch
+// used by saveState() when localStorage is over quota.
 function stripPhotosFromProject(p) {
   return {
     ...p, rooms: p.rooms.map(r => ({
@@ -573,6 +586,9 @@ function stripPhotosFromProject(p) {
   };
 }
 
+// Persist state to localStorage, degrading gracefully when the quota is hit
+// (drop photos for the active project first, then all projects) so a save
+// never fails outright and silently loses the agent's work.
 function saveState() {
   try {
     const toSave = {
@@ -623,6 +639,8 @@ function hideToast() {
   clearTimeout(_toastTimer);
 }
 
+// The one way to mutate state: merge a patch, persist, and re-render. Pass
+// skipRender=true for changes that shouldn't trigger a full repaint mid-edit.
 function setState(patch, skipRender) {
   Object.assign(state, patch);
   saveState();
@@ -687,6 +705,9 @@ function dot(colorClass, cls) {
   return `<span class="inline-block rounded-full flex-shrink-0 ${colorClass} ${cls || 'w-2 h-2'}"></span>`;
 }
 
+// Shrinks a captured photo (max 900px, JPEG 0.65) before it's stored as a
+// base64 string in the project. Full-size camera photos would blow past the
+// ~5MB localStorage quota after only a handful of captures.
 async function compressPhoto(file) {
   return new Promise(resolve => {
     const reader = new FileReader();
@@ -955,6 +976,8 @@ function isPriceOverridden(itemId, project) {
   return project?.priceOverrides?.[itemId] !== undefined || state.globalPriceOverrides[itemId] !== undefined;
 }
 
+// Sum of qty × unit cost across every line item in every room — the running
+// repair estimate shown in the header and on each dashboard card.
 function getProjectTotal(project) {
   if (!project) return 0;
   return project.rooms.reduce((sum, room) =>
@@ -962,6 +985,8 @@ function getProjectTotal(project) {
       s + g.items.reduce((t, item) => t + (item.qty || 0) * (item.unitCost || 0), 0), 0), 0);
 }
 
+// Walkthrough completeness = reviewed groups / total groups. A group counts
+// as "reviewed" once it has items selected or is marked No Action Needed.
 function getProgress(project) {
   if (!project) return { reviewed: 0, total: 0, pct: 0 };
   const allGroups = project.rooms.flatMap(r => r.groups);
@@ -988,6 +1013,8 @@ function goToRoom(roomId) {
   setState({ activeRoomId: roomId, activeGroupKey: null, view: 'room-groups' });
 }
 
+// Derives the dashboard status pill (Not Started / In Progress / Complete)
+// from whether the walkthrough has begun and how many groups are reviewed.
 function getProjectStatus(project) {
   if (!project.walkthroughStartedAt) return { key:'not_started', label:'Not Started', classes:'bg-slate-100 text-slate-500' };
   const pct = getProgress(project).pct;
@@ -1027,6 +1054,9 @@ function renameProject(projectId, newName) {
   render();
 }
 
+// Builds a new project from the setup screen's room configuration, expanding
+// counts (e.g. 3 bedrooms) into individually labelled rooms and ordering them
+// by the recommended walkthrough sequence.
 function createProject(name, address, roomConfigs) {
   const now = Date.now();
   const rooms = [];
@@ -1071,6 +1101,10 @@ function getSelectedCatalogItem(groupState, catalogId) {
   return groupState?.items?.find(i => i.catalogId === catalogId);
 }
 
+// Core mutation primitive. All the setItem*/setGroup*/addPhoto* helpers below
+// funnel through this: clone the target project, let `updater` mutate the
+// clone, stamp updatedAt, then swap it back in and persist. Cloning keeps the
+// live state immutable-ish and avoids accidental shared-reference bugs.
 function updateProject(projectId, updater) {
   const idx = state.projects.findIndex(p => p.id === projectId);
   if (idx < 0) return;
@@ -1192,6 +1226,8 @@ function deleteLineItem(projectId, roomId, groupKey, lineItemId) {
   });
 }
 
+// Clone a project's room/section structure into a fresh project, clearing all
+// selections/photos — handy for a similar property layout without re-setup.
 function duplicateProject(projectId) {
   const src = state.projects.find(p => p.id === projectId);
   if (!src) return;
@@ -1218,8 +1254,14 @@ function duplicateProject(projectId) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 5. SPARKCHECK ENGINE
+// A rules-based safety net that scans a project for the expensive things a
+// rushed walkthrough tends to miss (unreviewed systems, roof with no photo,
+// appliances with no condition photo, checked items with zero qty, etc.) and
+// returns a list of {level, msg, roomType/roomId, groupKey} issues. Each rule
+// is intentionally simple and independent so it's easy to add/tune more.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Returns all triggered issues for a project, tiered critical > warning > info.
 function runSparkCheck(project) {
   if (!project) return [];
   const issues = [];
@@ -1331,8 +1373,13 @@ function runSparkCheck(project) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 6. DEAL ANALYZER
+// Turns the repair total into an acquisition decision: given ARV, target
+// profit, and holding/selling costs, it computes a Max Offer and a
+// Green/Yellow/Red confidence read so the estimate is actionable, not just a
+// number.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Compute max offer, estimated profit, and a confidence tier for a project.
 function analyzeDeal(project) {
   if (!project) return null;
   const da = project.dealAnalyzer || {};
@@ -1416,6 +1463,8 @@ function buildProjectSummarySentences(data) {
 // 7. EXPORT ENGINE (Excel + ZIP)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Builds the styled .xlsx workbook: a Summary tab (project + deal numbers)
+// followed by one tab per room listing every line item, its cost, and notes.
 function buildExcel(project) {
   const wb = XLSX.utils.book_new();
   const deal = analyzeDeal(project);
@@ -1498,6 +1547,8 @@ function buildExcel(project) {
   return XLSX.write(wb, { bookType:'xlsx', type:'array' });
 }
 
+// Bundles the full deliverable into one downloadable ZIP: the Excel workbook,
+// a plain-text summary, and all captured photos organized by room/group.
 async function exportZip(project) {
   const zip = new JSZip();
 
@@ -1572,6 +1623,9 @@ async function exportZip(project) {
 // 8. RENDER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
+// The render pipeline: pick the view function for the current state.view,
+// build its HTML string, and swap it into #app in one shot. Each view returns
+// header + <main> + bottom nav. Runs after every setState().
 function render() {
   const app = document.getElementById('app');
   const views = {
@@ -1600,6 +1654,8 @@ function toggleReorderMode() {
   setState({ reorderMode: !state.reorderMode });
 }
 
+// Shared dark app-bar for every screen: title, optional back/menu buttons,
+// live running total, critical-issue badge, and optional progress bars.
 function renderHeader(title, showMenu = true, showBack = false, backView = 'walkthrough', opts = {}) {
   // The dashboard is a list of ALL projects, so it must never show a specific
   // project's name as a subtitle — only per-project screens (walkthrough,
@@ -1617,7 +1673,7 @@ function renderHeader(title, showMenu = true, showBack = false, backView = 'walk
   // name, so the agent always knows both which project AND where in it.
   const subtitle = opts.subtitle != null ? opts.subtitle : (project ? project.name : '');
   return `
-    <div class="flex-shrink-0 bg-slate-900 text-white pt-safe">
+    <header class="flex-shrink-0 bg-slate-900 text-white pt-safe">
       <div class="flex items-center gap-3 px-4 py-3">
         ${showBack ? `<button onclick="navigate('${backView}')" class="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 text-white text-lg mr-1">‹</button>` : ''}
         ${showMenu ? `<button onclick="openPanel()" class="w-9 h-9 flex items-center justify-center rounded-full bg-white/10">
@@ -1661,9 +1717,11 @@ function renderHeader(title, showMenu = true, showBack = false, backView = 'walk
               <span class="text-[10px] text-slate-500 font-medium flex-shrink-0 w-10 text-right tabular-nums">${opts.progressPct}%</span>
             </div>` : ''}
         </div>` : ''}
-    </div>`;
+    </header>`;
 }
 
+// Persistent bottom tab bar: Projects / Walkthrough / SparkCheck / Deal,
+// with a live critical-issue count badge on the SparkCheck tab.
 function renderBottomNav() {
   const v = state.view;
   const isWalk = ['walkthrough','room-groups','group-detail'].includes(v);
@@ -1678,22 +1736,23 @@ function renderBottomNav() {
   const issues = project ? runSparkCheck(project) : [];
   const criticals = issues.filter(i => i.level === 'critical').length;
 
-  return `<div class="flex-shrink-0 bg-white border-t border-slate-100 safe-bottom">
+  return `<nav aria-label="Primary" class="flex-shrink-0 bg-white border-t border-slate-100 safe-bottom">
     <div class="flex">
       ${tabs.map(tab => {
         const active = tab.id === v || (tab.id === 'walkthrough' && isWalk);
         const warn = tab.id === 'sparkcheck' && criticals > 0;
-        return `<button onclick="navigate('${tab.id}')" class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 ${active ? 'tab-active' : ''} relative">
+        return `<button onclick="navigate('${tab.id}')" aria-current="${active ? 'page' : 'false'}" class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 ${active ? 'tab-active' : ''} relative">
           <div class="${warn ? 'text-red-500' : active ? 'text-brand' : 'text-slate-400'}">${tab.icon}</div>
           <span class="text-[10px] font-medium ${warn ? 'text-red-500' : active ? 'text-brand' : 'text-slate-400'}">${tab.label}</span>
           ${warn ? `<span class="absolute top-1.5 right-[calc(50%-16px)] w-4 h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">${criticals}</span>` : ''}
         </button>`;
       }).join('')}
     </div>
-  </div>`;
+  </nav>`;
 }
 
-// ── DASHBOARD ──
+// ── DASHBOARD ── Home screen: list of all projects with status pills, a
+//    "continue where you left off" banner, sorting, and per-project totals.
 
 let _dashboardSort = localStorage.getItem(SK_SORT) || 'updated_desc';
 function setDashboardSort(value) {
@@ -1766,7 +1825,7 @@ function renderDashboard() {
   if (stats.complete > 0) statParts.push(`<span class="font-semibold text-green-600">${stats.complete}</span> complete`);
   return `
     ${renderHeader('Spark Estimator')}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-2 flex items-center justify-between">
         <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-widest">Your Projects</h2>
         ${projects.length > 0 ? `<button onclick="navigate('project-setup')" class="text-brand text-sm font-semibold">+ New</button>` : ''}
@@ -1850,16 +1909,17 @@ function renderDashboard() {
           </div>
         </div>
       `}
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
-// ── PROJECT SETUP ──
+// ── PROJECT SETUP ── New-project form: name/address plus room configuration
+//    (bedroom/bathroom counts and which standard sections to include).
 
 function renderProjectSetup() {
   return `
     ${renderHeader('New Project', false, true, 'dashboard')}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-5 pb-24 fade-in">
         <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-4">
           <h3 class="font-semibold text-slate-800 mb-4">Property Details</h3>
@@ -1940,7 +2000,7 @@ function renderProjectSetup() {
         </button>
         <p class="text-xs text-slate-400 text-center mt-3">You can start the walkthrough and edit rooms anytime after creating.</p>
       </div>
-    </div>`;
+    </main>`;
 }
 
 // Room count toggles stored in DOM — read on submit
@@ -2040,7 +2100,9 @@ function startWalkthrough() {
   }
 }
 
-// ── WALKTHROUGH ──
+// ── WALKTHROUGH ── The room overview / hub: shows overall progress and the
+//    recommended room order (with sequence numbers, a "NEXT" badge, and
+//    optional drag-to-reorder). Entry point into each room's checklist.
 
 function renderWalkthrough() {
   const project = activeProject();
@@ -2055,7 +2117,7 @@ function renderWalkthrough() {
 
   return `
     ${renderHeader(project.name)}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <!-- Progress card -->
       <div class="px-4 pt-4 pb-2 fade-in">
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
@@ -2157,11 +2219,12 @@ function renderWalkthrough() {
           </div>
         </div>
       </div>
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
-// ── ROOM GROUPS ──
+// ── ROOM GROUPS ── One room's checklist: its groups (Flooring, Cabinets…),
+//    condition rating, notes, and a "Copy setup from another room" shortcut.
 
 function renderRoomGroups() {
   const project = activeProject();
@@ -2197,7 +2260,7 @@ function renderRoomGroups() {
       progressPct: overallProg.pct,
       roomProgress: { label: room.label, reviewed: roomReviewed, total: roomGroupsTotal, pct: roomPct, roomId: room.id },
     })}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-24 fade-in">
         ${copySiblings.length > 0 ? `
           <button onclick="openCopyRoomPicker('${project.id}','${room.id}')"
@@ -2290,11 +2353,13 @@ function renderRoomGroups() {
           `}
         </div>
       </div>
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
-// ── GROUP DETAIL ──
+// ── GROUP DETAIL ── The item-selection screen for a single group: check
+//    items on/off, set quantities, add photos/serials/notes, or mark the
+//    whole group "No Action Needed".
 
 function renderGroupDetail() {
   const project = activeProject();
@@ -2339,7 +2404,7 @@ function renderGroupDetail() {
       progressPct: getProgress(project).pct,
       roomProgress: { label: room.label, reviewed: roomReviewed, total: groupsInRoomTotal, pct: roomPct, roomId: room.id },
     })}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="pb-24 fade-in">
 
         <!-- NAN + Quick Profiles bar -->
@@ -2508,7 +2573,7 @@ function renderGroupDetail() {
           </button>
         </div>
       </div>
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
@@ -2525,7 +2590,8 @@ function goNextGroup() {
   }
 }
 
-// ── SPARKCHECK ──
+// ── SPARKCHECK ── Review screen listing every issue from runSparkCheck(),
+//    grouped by severity, each deep-linking to the group that needs work.
 
 function renderSparkCheck() {
   const project = activeProject();
@@ -2563,7 +2629,7 @@ function renderSparkCheck() {
 
   return `
     ${renderHeader('SparkCheck')}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-24 fade-in">
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mb-4">
           <div class="flex items-center gap-4">
@@ -2599,7 +2665,7 @@ function renderSparkCheck() {
             </button>
           </div>`}
       </div>
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
@@ -2619,7 +2685,8 @@ function navigateToIssue(roomId, roomType, groupKey) {
   }
 }
 
-// ── DEAL ANALYZER ──
+// ── DEAL ANALYZER ── Input screen for ARV / profit / costs that surfaces the
+//    computed Max Offer and deal-confidence read from analyzeDeal().
 
 function renderDealAnalyzer() {
   const project = activeProject();
@@ -2636,7 +2703,7 @@ function renderDealAnalyzer() {
 
   return `
     ${renderHeader('Deal Analyzer')}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-24 fade-in">
 
         ${deal && da.arv > 0 ? `
@@ -2726,7 +2793,7 @@ function renderDealAnalyzer() {
 
         <p class="text-xs text-slate-400 text-center mb-4">Formula: Max Offer = ARV − Repairs − Target Profit − Holding − Selling</p>
       </div>
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
@@ -2740,7 +2807,7 @@ function saveDealField(field, value) {
   render();
 }
 
-// ── EXPORT ──
+// ── EXPORT ── Pre-export review screen and the trigger for the ZIP download.
 
 function renderExport() {
   const project = activeProject();
@@ -2753,7 +2820,7 @@ function renderExport() {
 
   return `
     ${renderHeader('Export', false, true, 'walkthrough')}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-24 fade-in">
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4">
           <div class="flex items-center gap-3 mb-4">
@@ -2809,7 +2876,7 @@ function renderExport() {
             <button onclick="navigate('sparkcheck')" class="mt-3 w-full py-2.5 border border-red-200 rounded-xl text-red-600 text-sm font-semibold">Review Issues →</button>
           </div>` : ''}
       </div>
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
@@ -2827,14 +2894,15 @@ async function triggerExport() {
   }
 }
 
-// ── ROOM SETUP ──
+// ── ROOM SETUP ── Edit-rooms screen: project notes, add/remove rooms and
+//    sections after a project already exists.
 
 function renderRoomSetup() {
   const project = activeProject();
   if (!project) return renderNeedsProject();
   return `
     ${renderHeader('Edit Rooms', false, true, 'walkthrough')}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-24 fade-in">
 
         <!-- Project Details -->
@@ -2891,7 +2959,7 @@ function renderRoomSetup() {
           Done Editing Rooms
         </button>
       </div>
-    </div>`;
+    </main>`;
 }
 
 function sortRoomsByOrder(p) {
@@ -3118,6 +3186,10 @@ function confirmCopyRoom(projectId, targetRoomId, sourceRoomId) {
   });
 }
 
+// Copies a sibling room's item selections, quantities and NAN flags onto the
+// target room. Instance-specific evidence (photos, serials, years, notes) is
+// deliberately cleared and new item ids are minted, so speed never comes at
+// the cost of misattributing one room's proof to another.
 function applyRoomCopy(projectId, targetRoomId, sourceRoomId) {
   updateProject(projectId, p => {
     const target = p.rooms.find(r => r.id === targetRoomId);
@@ -3187,7 +3259,7 @@ function closeSummaryModal() {
 function renderSettings() {
   return `
     ${renderHeader('Settings', false, true, 'dashboard')}
-    <div class="flex-1 scroll-y" id="main-content">
+    <main class="flex-1 scroll-y" id="main-content">
       <div class="px-4 pt-4 pb-24 fade-in space-y-4">
 
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -3234,19 +3306,19 @@ function renderSettings() {
           </div>
         </div>
       </div>
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
 function renderNeedsProject() {
   return `
     ${renderHeader('Spark Estimator')}
-    <div class="flex-1 flex flex-col items-center justify-center p-8 text-center">
+    <main class="flex-1 flex flex-col items-center justify-center p-8 text-center">
       <div class="text-slate-300 mb-4">${icon('home', 'w-10 h-10')}</div>
       <p class="font-bold text-slate-800 mb-2">No project selected</p>
       <p class="text-slate-400 text-sm mb-6">Select a project from the dashboard to continue.</p>
       <button onclick="navigate('dashboard')" class="bg-brand text-white font-semibold px-8 py-3.5 rounded-xl text-sm">Go to Projects</button>
-    </div>
+    </main>
     ${renderBottomNav()}`;
 }
 
@@ -3302,6 +3374,9 @@ function updateTotalBar() {
   });
 }
 
+// Fired when the camera/file input picks a photo: compresses it for storage,
+// attaches it to the item or group, and — for items that carry a serial
+// (HVAC, water heater, appliances) — kicks off OCR to pre-fill the serial #.
 async function handlePhotoCapture(event, projectId, roomId, groupKey, lineItemIdOrGroup) {
   const file = event.target.files?.[0];
   if (!file) return;
