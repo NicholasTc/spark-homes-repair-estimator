@@ -1582,16 +1582,19 @@ function renderHeader(title, showMenu = true, showBack = false, backView = 'walk
       ${opts.roomProgress || typeof opts.progressPct === 'number' ? `
         <div class="pb-2 space-y-1">
           ${opts.roomProgress ? `
-            <button onclick="goToRoom('${opts.roomProgress.roomId}')" class="w-full flex items-center gap-2 px-4 text-left">
-              <span class="text-[11px] font-bold text-white flex-shrink-0 w-16 truncate">${esc(opts.roomProgress.label)}</span>
-              <div class="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                <div class="h-full bg-brand progress-bar-fill rounded-full" style="width:${opts.roomProgress.pct}%"></div>
-              </div>
-              <span class="text-[11px] text-slate-300 font-semibold flex-shrink-0 w-10 text-right tabular-nums">${opts.roomProgress.reviewed}/${opts.roomProgress.total}</span>
-            </button>` : ''}
+            <div class="px-4">
+              <p class="text-[9px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Current Area</p>
+              <button onclick="goToRoom('${opts.roomProgress.roomId}')" class="w-full flex items-center gap-2 text-left -mx-0.5 px-0.5">
+                <span class="text-xs font-bold text-white flex-shrink-0 w-20 truncate">${esc(opts.roomProgress.label)}</span>
+                <div class="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div class="h-full bg-brand progress-bar-fill rounded-full" style="width:${opts.roomProgress.pct}%"></div>
+                </div>
+                <span class="text-xs text-slate-300 font-semibold flex-shrink-0 w-10 text-right tabular-nums">${opts.roomProgress.reviewed}/${opts.roomProgress.total}</span>
+              </button>
+            </div>` : ''}
           ${typeof opts.progressPct === 'number' ? `
             <div class="flex items-center gap-2 px-4">
-              <span class="text-[10px] text-slate-500 font-semibold flex-shrink-0 w-16 truncate">Overall</span>
+              <span class="text-[10px] text-slate-500 font-semibold flex-shrink-0 w-20 truncate">Overall</span>
               <div class="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
                 <div class="h-full bg-slate-400 progress-bar-fill rounded-full" style="width:${opts.progressPct}%"></div>
               </div>
@@ -1968,7 +1971,13 @@ function startWalkthrough() {
   const project = activeProject();
   if (!project) return;
   updateProject(project.id, p => { p.walkthroughStartedAt = Date.now(); });
-  render();
+  // "Start" should feel like it actually starts something — jump straight
+  // into the first recommended room instead of just relabeling this card.
+  if (project.rooms.length > 0) {
+    setState({ activeRoomId: project.rooms[0].id, view: 'room-groups' });
+  } else {
+    render();
+  }
 }
 
 // ── WALKTHROUGH ──
@@ -2014,8 +2023,18 @@ function renderWalkthrough() {
       </div>
 
       <!-- Room list -->
-      <div class="px-4 pb-20 space-y-2 mt-2">
-        ${project.rooms.map(room => {
+      <div class="px-4 pb-20 mt-2">
+        <div class="flex items-center justify-between px-1 mb-2">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Recommended Order</p>
+          <p class="text-xs text-slate-400 tabular-nums">${project.rooms.filter(r => r.groups.length && r.groups.every(g => g.reviewed)).length}/${project.rooms.length} rooms done</p>
+        </div>
+        <div class="space-y-2">
+        ${(() => {
+          // "Next up" = the first room in the recommended order that still has
+          // unreviewed groups — same room Start Walkthrough / Continue would
+          // send you to. Shown so the order + your position in it are explicit.
+          const nextRoomId = project.rooms.find(r => r.groups.some(g => !g.reviewed))?.id;
+          return project.rooms.map((room, idx) => {
           const rt = ROOM_TYPE_MAP[room.type];
           const groupsDone = room.groups.filter(g => g.reviewed).length;
           const total = room.groups.length;
@@ -2024,16 +2043,19 @@ function renderWalkthrough() {
           const roomIssues = issues.filter(i => i.roomId === room.id).length;
           const roomTypeIssues = issues.filter(i => i.roomType === room.type).length;
           const hasIssues = roomIssues + roomTypeIssues;
+          const isNext = room.id === nextRoomId;
           const condColors = { good:'bg-green-100 text-green-700', fair:'bg-amber-100 text-amber-700', poor:'bg-red-100 text-red-700', gut:'bg-red-200 text-red-800' };
           return `
             <div onclick="setState({activeRoomId:'${room.id}',view:'room-groups'})"
-              class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              class="bg-white rounded-2xl border shadow-sm overflow-hidden ${isNext ? 'border-brand/30 ring-1 ring-brand/15' : 'border-slate-100'}">
               <div class="p-4">
                 <div class="flex items-center gap-3">
+                  <span class="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0 tabular-nums ${isNext ? 'bg-brand text-white' : 'bg-slate-100 text-slate-400'}">${idx + 1}</span>
                   <span class="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center text-slate-500 flex-shrink-0">${icon(rt?.icon || 'home', 'w-5 h-5')}</span>
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
                       <p class="font-semibold text-slate-900 text-sm">${esc(room.label)}</p>
+                      ${isNext ? `<span class="text-[10px] px-1.5 py-0.5 rounded-full font-bold bg-brand/10 text-brand uppercase tracking-wide">Next</span>` : ''}
                       ${room.condition ? `<span class="text-xs px-2 py-0.5 rounded-full font-medium ${condColors[room.condition] || 'bg-slate-100 text-slate-600'}">${room.condition}</span>` : ''}
                       ${hasIssues ? `<span class="text-xs text-red-500 font-semibold inline-flex items-center gap-0.5">${icon('warning', 'w-3 h-3')} ${hasIssues}</span>` : ''}
                     </div>
@@ -2051,7 +2073,9 @@ function renderWalkthrough() {
                 </div>
               </div>
             </div>`;
-        }).join('')}
+          }).join('');
+        })()}
+        </div>
 
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mt-4">
           <div class="flex">
@@ -2179,7 +2203,7 @@ function renderRoomGroups() {
             <button onclick="goToRoom('${nextRoom.id}')" class="w-full py-3.5 bg-brand text-white font-bold rounded-2xl text-sm">
               Continue to ${esc(nextRoom.label)} →
             </button>
-            <button onclick="navigate('walkthrough')" class="w-full py-2 text-center text-xs text-slate-400 font-semibold">
+            <button onclick="navigate('walkthrough')" class="w-full py-3 text-center text-sm text-slate-600 font-semibold bg-white border border-slate-200 rounded-2xl active:bg-slate-50">
               ‹ All Rooms
             </button>
           ` : overallProg.pct >= 100 ? `
