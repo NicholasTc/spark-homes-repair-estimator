@@ -47,6 +47,19 @@
     .tab-active svg,.tab-active span{color:#ea580c}
     .item-row-enter{animation:rowEnter .2s ease}
     @keyframes rowEnter{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+
+    /* Tactile press feedback — applies to every button and every
+       onclick-driven element (this app uses plain divs as tap targets in
+       a lot of places, e.g. cards), so tapping anything gives an obvious
+       "this registered" signal instead of the flat, unresponsive feel you
+       get once the native tap-highlight is disabled above. */
+    button,a,[onclick]{transition:transform .12s ease,opacity .12s ease}
+    button:not(:disabled):active,
+    a:active,
+    [onclick]:not(input):not(textarea):not(select):active{
+      transform:scale(0.96);
+      opacity:.72;
+    }
   </style>
 </head>
 <body class="bg-slate-100">
@@ -3676,6 +3689,12 @@ function restoreData(event) {
 
 loadState();
 render();
+
+// iOS Safari only honors the CSS :active pseudo-class on tap if some
+// touch listener is registered on the page — otherwise taps behave like
+// clicks with no pressed state at all. This is a no-op listener purely to
+// unlock :active-based press feedback (see the <style> block) on iPhone.
+document.addEventListener('touchstart', function(){}, { passive: true });
 
 // PWA service worker registration
 if ('serviceWorker' in navigator) {
